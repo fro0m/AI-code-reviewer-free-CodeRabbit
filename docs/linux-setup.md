@@ -153,34 +153,59 @@ cp /path/to/code-scanner/examples/python-config.toml config.toml
 uv run code-scanner --config config.toml
 ```
 
-## Running as a Background Service
+## Running as a Background Service (Auto-Start)
 
-### Using systemd (User Service)
+The scanner now runs as a single background daemon (`code-scanner service`) that manages multiple projects.
 
-Create `~/.config/systemd/user/code-scanner.service`:
+### 1. Enable Auto-Start
 
-```ini
-[Unit]
-Description=Code Scanner
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/path/to/your/project
-ExecStart=/path/to/code-scanner/.venv/bin/python -m code_scanner --config config.toml
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-```
+To start the service automatically on login:
 
 ```bash
-# Enable and start
-systemctl --user enable code-scanner
-systemctl --user start code-scanner
+./scripts/autostart-linux.sh enable
+```
 
+This creates a user-level `systemd` service (`code-scanner-service.service`) that:
+- Starts automatically when you log in.
+- Waits 30 seconds for your LLM backend to initialize.
+- Runs in the background, ready to monitor projects.
+
+### 2. Manage Monitored Projects
+
+Once the service is running (or enabled), use the CLI to add projects:
+
+```bash
+# Add a project to be watched (persistent)
+uv run code-scanner add ~/my-project --config ~/my-project/config.toml
+
+# List watched projects
+uv run code-scanner list
+
+# Stop watching a project
+uv run code-scanner remove ~/my-project
+```
+
+### 3. Disable Auto-Start
+
+To remove the background service:
+
+```bash
+./scripts/autostart-linux.sh disable
+```
+
+### Manual Service Management
+
+Services are created in `~/.config/systemd/user/`. You can control them with `systemctl`:
+
+```bash
+# Status
+systemctl --user status code-scanner-service
+
+# Restart
+systemctl --user restart code-scanner-service
+```
 # View logs
-journalctl --user -u code-scanner -f
+journalctl --user -u code-scanner-service.service -f
 ```
 
 ## Troubleshooting

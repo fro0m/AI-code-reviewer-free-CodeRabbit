@@ -1,398 +1,193 @@
-"""CLI entry point and main application."""
 
 import argparse
-import atexit
+import asyncio
 import logging
 import os
-import signal
+import socket
 import sys
-import threading
-import time
 from pathlib import Path
-from typing import Optional
 
-from .config import Config, ConfigError, load_config
-from .git_watcher import GitWatcher, GitError
-from .issue_tracker import IssueTracker
-from .base_client import BaseLLMClient, LLMClientError
-from .lmstudio_client import LMStudioClient
-from .ollama_client import OllamaClient
-from .output import OutputGenerator
-from .scanner import Scanner
-from .utils import setup_logging, is_interactive, prompt_yes_no
+import httpx
+import uvicorn
 
+from code_scanner.config import ServiceConfig
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(os.path.expanduser("~/.code-scanner/service.log"))
+    ]
+)
 logger = logging.getLogger(__name__)
 
+SERVICE_URL = f"http://{ServiceConfig.host}:{ServiceConfig.port}"
 
-def create_llm_client(config: Config) -> BaseLLMClient:
-    """Create the appropriate LLM client based on configuration.
+def check_server_lock() -> socket.socket:
+    """Ensure single instance via port binding."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind((ServiceConfig.host, ServiceConfig.lock_port))
+        return s
+    except OSError:
+        print(f"Error: Code Scanner service is already running (Port {ServiceConfig.lock_port} busy).")
+        sys.exit(1)
 
-    Args:
-        config: Application configuration with LLM settings.
-
-    Returns:
-        Configured LLM client instance.
-
-    Raises:
-        ConfigError: If backend is invalid.
-    """
-    backend = config.llm.backend
+def run_service(args):
+    """Start the background service."""
+    # check lock
+    _lock_socket = check_server_lock()
     
-    if backend == "lm-studio":
-        return LMStudioClient(config.llm)
-    elif backend == "ollama":
-        return OllamaClient(config.llm)
-    else:
-        raise ConfigError(
-            f"Invalid backend '{backend}'. "
-            f"Supported backends: lm-studio, ollama"
-        )
-
-
-class LockFileError(Exception):
-    """Lock file related error."""
-
-    pass
-
-
-class Application:
-    """Main application coordinator."""
-
-    def __init__(self, config: Config):
-        """Initialize the application.
-
-        Args:
-            config: Application configuration.
-        """
-        self.config = config
-        self.git_watcher: Optional[GitWatcher] = None
-        self.llm_client: Optional[BaseLLMClient] = None
-        self.issue_tracker: Optional[IssueTracker] = None
-        self.output_generator: Optional[OutputGenerator] = None
-        self.scanner: Optional[Scanner] = None
-
-        self._git_thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
-        self._lock_acquired = False
-
-    def run(self) -> int:
-        """Run the application.
-
-        Returns:
-            Exit code (0 for success, non-zero for error).
-        """
-        try:
-            self._setup()
-            self._run_main_loop()
-            return 0
-        except (ConfigError, GitError, LLMClientError, LockFileError) as e:
-            logger.error(str(e))
-            return 1
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user")
-            return 130  # Standard exit code for SIGINT
-        except SystemExit as e:
-            # User declined to overwrite or other sys.exit() call
-            # Make sure cleanup runs
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}", exc_info=True)
-            return 1
-        finally:
-            self._cleanup()
-
-    def _setup(self) -> None:
-        """Set up all components."""
-        # Check and acquire lock
-        self._acquire_lock()
-
-        # Check for existing output file
-        self._check_output_file()
-
-        # Set up logging
-        setup_logging(self.config.log_path)
-        logger.info("=" * 60)
-        logger.info("Code Scanner starting")
-        logger.info(f"Target directory: {self.config.target_directory}")
-        logger.info(f"Config file: {self.config.config_file}")
-        logger.info(f"Output file: {self.config.output_path}")
-        total_checks = sum(len(g.checks) for g in self.config.check_groups)
-        logger.info(f"Check groups: {len(self.config.check_groups)}, Total checks: {total_checks}")
-        logger.info("=" * 60)
-
-        # Initialize components
-        self.git_watcher = GitWatcher(
-            self.config.target_directory,
-            self.config.commit_hash,
-        )
-        self.git_watcher.connect()
-
-        # Create appropriate LLM client based on backend
-        self.llm_client = create_llm_client(self.config)
-        self.llm_client.connect()
-        logger.info(f"Connected to {self.llm_client.backend_name}")
-
-        # If context limit couldn't be determined, prompt user
-        if self.llm_client.needs_context_limit():
-            self._prompt_for_context_limit()
-
-        self.issue_tracker = IssueTracker()
-        self.output_generator = OutputGenerator(self.config.output_path)
-
-        # Create initial output file so user knows it's working
-        self.output_generator.write(self.issue_tracker, {"status": "Scanning in progress..."})
-        logger.info(f"Created initial output file: {self.config.output_path}")
-
-        self.scanner = Scanner(
-            config=self.config,
-            git_watcher=self.git_watcher,
-            llm_client=self.llm_client,
-            issue_tracker=self.issue_tracker,
-            output_generator=self.output_generator,
-        )
-
-    def _acquire_lock(self) -> None:
-        """Acquire the lock file.
-
-        Raises:
-            LockFileError: If lock file exists.
-        """
-        lock_path = self.config.lock_path
-
-        if lock_path.exists():
-            raise LockFileError(
-                f"Lock file exists: {lock_path}\n"
-                "Another instance may be running. If not, delete the lock file manually."
-            )
-
-        # Create lock file with PID
-        try:
-            with open(lock_path, "w") as f:
-                f.write(f"{os.getpid()}\n")
-            self._lock_acquired = True
-            logger.debug(f"Acquired lock: {lock_path}")
-            
-            # Register atexit handler to ensure lock is released on any exit
-            atexit.register(self._release_lock)
-        except IOError as e:
-            raise LockFileError(f"Could not create lock file: {e}")
-
-    def _release_lock(self) -> None:
-        """Release the lock file."""
-        if self._lock_acquired:
-            lock_path = self.config.lock_path
-            try:
-                if lock_path.exists():
-                    lock_path.unlink()
-                    logger.debug(f"Released lock: {lock_path}")
-            except IOError as e:
-                logger.warning(f"Could not remove lock file: {e}")
-            self._lock_acquired = False
-
-    def _prompt_for_context_limit(self) -> None:
-        """Prompt user to enter context limit when it can't be determined.
-
-        Raises:
-            LLMClientError: If running non-interactively or invalid input.
-        """
-        if not is_interactive():
-            raise LLMClientError(
-                "Could not determine context limit from LM Studio API and "
-                "running in non-interactive mode. Please set context_limit "
-                "in the [llm] section of config.toml."
-            )
-
-        print("\n" + "=" * 60)
-        print("Context limit could not be determined from LM Studio API.")
-        print("Please enter the context window size for your model.")
-        print("Common values: 4096, 8192, 16384, 32768, 131072")
-        print("=" * 60)
-
-        while True:
-            try:
-                user_input = input("\nEnter context limit (tokens): ").strip()
-                if not user_input:
-                    print("Please enter a value.")
-                    continue
-
-                limit = int(user_input)
-                if limit <= 0:
-                    print("Context limit must be a positive number.")
-                    continue
-
-                self.llm_client.set_context_limit(limit)
-                print(f"Context limit set to {limit} tokens.\n")
-                return
-
-            except ValueError:
-                print("Invalid input. Please enter a number.")
-            except EOFError:
-                raise LLMClientError("No input provided for context limit.")
-
-    def _check_output_file(self) -> None:
-        """Check for existing output file and prompt for overwrite.
-
-        Raises:
-            SystemExit: If user declines to overwrite.
-        """
-        output_path = self.config.output_path
-
-        if output_path.exists():
-            if not is_interactive():
-                raise RuntimeError(
-                    "Output file exists and running in non-interactive mode. "
-                    "Please delete the file manually or run interactively."
-                )
-
-            # Get file stats
-            try:
-                stats = output_path.stat()
-                size_mb = stats.st_size / (1024 * 1024)
-                mtime = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stats.st_mtime))
-                file_info = f" (Size: {size_mb:.2f} MB, Modified: {mtime})"
-            except OSError:
-                file_info = ""
-
-            if not prompt_yes_no(
-                f"Output file {output_path} already exists{file_info}. Overwrite?",
-                default=False,
-            ):
-                logger.info("User declined to overwrite, exiting")
-                sys.exit(0)
-
-            # Delete existing file
-            output_path.unlink()
-            logger.info(f"Deleted existing output file: {output_path}")
-
-    def _run_main_loop(self) -> None:
-        """Run the main application loop."""
-        # Set up signal handler for clean exit
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-
-        # Start Git watcher thread
-        self._git_thread = threading.Thread(target=self._git_watch_loop, daemon=True)
-        self._git_thread.start()
-
-        # Start scanner
-        self.scanner.start()
-
-        # Wait for stop signal
-        logger.info("Scanner running. Press Ctrl+C to stop.")
-        while not self._stop_event.is_set():
-            time.sleep(0.5)
-
-    def _git_watch_loop(self) -> None:
-        """Git watcher loop - polls for changes."""
-        logger.info("Git watcher started")
-        last_state = None
-
-        while not self._stop_event.is_set():
-            try:
-                # Check for changes
-                if self.git_watcher.has_changes_since(last_state):
-                    logger.info("Git changes detected, signaling scanner to refresh")
-                    self.scanner.signal_refresh()
-                    last_state = self.git_watcher.get_state()
-
-                # Wait before next poll
-                self._stop_event.wait(timeout=self.config.git_poll_interval)
-
-            except Exception as e:
-                logger.error(f"Git watcher error: {e}")
-                time.sleep(5)
-
-        logger.info("Git watcher stopped")
-
-    def _signal_handler(self, signum: int, _frame: object) -> None:
-        """Handle termination signals."""
-        logger.info(f"Received signal {signum}, stopping...")
-        self._stop_event.set()
-
-    def _cleanup(self) -> None:
-        """Clean up resources."""
-        try:
-            logger.info("Cleaning up...")
-        except Exception:
-            pass  # Logging may not be set up yet
-
-        self._stop_event.set()
-
-        if self.scanner:
-            self.scanner.stop()
-
-        if self._git_thread and self._git_thread.is_alive():
-            self._git_thread.join(timeout=2)
-
-        self._release_lock()
-
-        try:
-            logger.info("Cleanup complete")
-        except Exception:
-            pass
-
-
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments.
-
-    Returns:
-        Parsed arguments.
-    """
-    parser = argparse.ArgumentParser(
-        prog="code-scanner",
-        description="AI-driven code scanner for identifying issues in uncommitted changes",
+    # Daemonize the process (fork into background)
+    if os.fork() > 0:
+        # Parent process - exit immediately
+        print(f"Code Scanner Service started on {ServiceConfig.host}:{ServiceConfig.port}")
+        print(f"Log file: ~/.code-scanner/service.log")
+        sys.exit(0)
+    
+    # Child process continues
+    os.setsid()  # Create new session, detach from terminal
+    
+    # Second fork to prevent zombie processes
+    if os.fork() > 0:
+        sys.exit(0)
+    
+    # Redirect standard file descriptors to /dev/null
+    sys.stdin = open(os.devnull, 'r')
+    sys.stdout = open(os.devnull, 'w')
+    sys.stderr = open(os.devnull, 'w')
+    
+    # Write PID file for later reference
+    pid_file = Path(os.path.expanduser("~/.code-scanner/service.pid"))
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()))
+    
+    config = uvicorn.Config(
+        "code_scanner.service:app",
+        host=ServiceConfig.host,
+        port=ServiceConfig.port,
+        log_level="info",
+        reload=False
     )
+    server = uvicorn.Server(config)
+    server.run()
 
-    parser.add_argument(
-        "target_directory",
-        type=Path,
-        help="Target directory to scan (must be a Git repository)",
-    )
+def run_add(args):
+    """Add a directory to watch."""
+    payload = {
+        "path": str(Path(args.target_directory).resolve()),
+        "config_path": str(Path(args.config).resolve()) if args.config else None
+    }
+    
+    try:
+        response = httpx.post(f"{SERVICE_URL}/watch/add", json=payload, timeout=10.0)
+        if response.status_code == 200:
+            print(f"Successfully started watching: {payload['path']}")
+        else:
+            print(f"Error ({response.status_code}): {response.text}")
+    except httpx.ConnectError:
+        print("Error: Could not connect to Code Scanner service. Is it running?")
+        sys.exit(1)
 
-    parser.add_argument(
-        "-c", "--config",
-        type=Path,
-        default=None,
-        help="Path to configuration file (default: config.toml in scanner directory)",
-    )
+def run_remove(args):
+    """Remove a watched directory."""
+    payload = {
+        "path": str(Path(args.target_directory).resolve())
+    }
+    
+    try:
+        response = httpx.post(f"{SERVICE_URL}/watch/remove", json=payload, timeout=10.0)
+        if response.status_code == 200:
+            print(f"Successfully stopped watching: {payload['path']}")
+        else:
+            print(f"Error ({response.status_code}): {response.text}")
+    except httpx.ConnectError:
+        print("Error: Could not connect to Code Scanner service. Is it running?")
+        sys.exit(1)
 
-    parser.add_argument(
-        "--commit",
-        type=str,
-        default=None,
-        help="Git commit hash to compare against (default: HEAD)",
-    )
+def run_list(args):
+    """List active watchers."""
+    try:
+        response = httpx.get(f"{SERVICE_URL}/status", timeout=5.0)
+        if response.status_code == 200:
+            data = response.json()
+            if not data:
+                print("No active watchers.")
+            else:
+                print(f"{'Path':<50} | {'Status':<10} | {'Issues':<5}")
+                print("-" * 75)
+                for item in data:
+                    status = "Running" if item['is_running'] else "Stopped"
+                    print(f"{item['target_directory']:<50} | {status:<10} | {item['total_issues']:<5}")
+        else:
+            print(f"Error ({response.status_code}): {response.text}")
+    except httpx.ConnectError:
+        print("Error: Could not connect to Code Scanner service. Is it running?")
+        sys.exit(1)
 
-    parser.add_argument(
-        "--version",
-        action="version",
-        version="%(prog)s 0.1.0",
-    )
+def run_mcp(args):
+    """Start MCP server (bridge to service)."""
+    # Defer import to avoid heavy dependencies if not used
+    from code_scanner.mcp_server import run_mcp_server
+    try:
+        asyncio.run(run_mcp_server())
+    except KeyboardInterrupt:
+        pass
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Code Scanner - AI-powered local code analysis")
+    parser.add_argument("--version", action="version", version="code-scanner 0.2.0")
+    
+    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+    
+    # SERVICE
+    parser_service = subparsers.add_parser("service", help="Start the background service daemon")
+    
+    # CLIENT (Add)
+    parser_add = subparsers.add_parser("add", help="Add a project to monitor")
+    parser_add.add_argument("target_directory", help="Path to project directory")
+    parser_add.add_argument("-c", "--config", help="Path to config.toml")
+    
+    # CLIENT (Remove)
+    parser_remove = subparsers.add_parser("remove", help="Stop monitoring a project")
+    parser_remove.add_argument("target_directory", help="Path to project directory")
+    
+    # CLIENT (List)
+    parser_list = subparsers.add_parser("list", help="List monitored projects")
+
+    # MCP
+    parser_mcp = subparsers.add_parser("mcp", help="Start MCP server (Stdio)")
 
     return parser.parse_args()
 
-
-def main() -> int:
-    """Main entry point.
-
-    Returns:
-        Exit code.
-    """
+def main():
+    # Ensure log directory exists
+    os.makedirs(os.path.expanduser("~/.code-scanner"), exist_ok=True)
+    
     args = parse_args()
-
-    try:
-        config = load_config(
-            target_directory=args.target_directory,
-            config_file=args.config,
-            commit_hash=args.commit,
-        )
-    except ConfigError as e:
-        print(f"Configuration error: {e}", file=sys.stderr)
-        return 1
-
-    app = Application(config)
-    return app.run()
-
+    
+    if args.command == "service":
+        run_service(args)
+    elif args.command == "add":
+        run_add(args)
+    elif args.command == "remove":
+        run_remove(args)
+    elif args.command == "list":
+        run_list(args)
+    elif args.command == "mcp":
+        run_mcp(args)
+    else:
+        # Default behavior validation or help
+        if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]):
+            print("Legacy mode deprecated. Please use 'code-scanner add <path>' or 'code-scanner service'.")
+            print("Run 'code-scanner --help' for details.")
+            sys.exit(1)
+        else:
+            print("No command provided.")
+            print("Run 'code-scanner --help' for usage.")
+            sys.exit(1)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

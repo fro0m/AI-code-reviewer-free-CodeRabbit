@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .instance_manager import get_lock_path as get_instance_lock_path
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -23,6 +25,12 @@ class ConfigError(Exception):
 
 
 @dataclass
+class ServiceConfig:
+    host: str = "127.0.0.1"
+    port: int = 8484
+    lock_port: int = 8485  # For global single-instance lock
+
+@dataclass
 class Config:
     """Application configuration."""
 
@@ -31,6 +39,7 @@ class Config:
     check_groups: list[CheckGroup]
     commit_hash: Optional[str] = None
     llm: LLMConfig = field(default_factory=LLMConfig)
+    service: ServiceConfig = field(default_factory=ServiceConfig)
 
     # Output file names (in target directory)
     output_file: str = "code_scanner_results.md"
@@ -58,11 +67,10 @@ class Config:
     def lock_path(self) -> Path:
         """Get full path to lock file.
         
-        Lock file is stored in the scanner's script directory (sibling to code-scanner)
-        to prevent multiple instances from running, regardless of target directory.
+        Lock file is stored in ~/.code-scanner/locks/ with a hash of the target
+        directory path. This allows multiple instances for different directories.
         """
-        script_dir = Path(__file__).parent.parent.parent
-        return script_dir / self.lock_file
+        return get_instance_lock_path(self.target_directory)
 
 
 def load_config(

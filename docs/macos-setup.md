@@ -157,50 +157,56 @@ ollama ps
 - Enable GPU acceleration in settings
 - Look for "GGUF" format models
 
-## Running as a Background Service
+## Running as a Background Service (Auto-Start)
 
-### Using launchd
+The scanner now runs as a single background daemon (`code-scanner service`) that manages multiple projects.
 
-Create `~/Library/LaunchAgents/com.code-scanner.plist`:
+### 1. Enable Auto-Start
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.code-scanner</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/path/to/code-scanner/.venv/bin/python</string>
-        <string>-m</string>
-        <string>code_scanner</string>
-        <string>--config</string>
-        <string>/path/to/project/config.toml</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>/path/to/project</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardErrorPath</key>
-    <string>/tmp/code-scanner.err</string>
-    <key>StandardOutPath</key>
-    <string>/tmp/code-scanner.out</string>
-</dict>
-</plist>
-```
+To start the service automatically on login:
 
 ```bash
-# Load the service
-launchctl load ~/Library/LaunchAgents/com.code-scanner.plist
+./scripts/autostart-macos.sh enable
+```
 
+This creates a Launch Agent (`com.codescanner.service`) that:
+- Starts automatically when you log in.
+- Waits 30 seconds for your LLM backend to initialize.
+- Runs in the background, ready to monitor projects.
+
+### 2. Manage Monitored Projects
+
+Once the service is running (or enabled), use the CLI to add projects:
+
+```bash
+# Add a project to be watched (persistent)
+uv run code-scanner add ~/my-project --config ~/my-project/config.toml
+
+# List watched projects
+uv run code-scanner list
+
+# Stop watching a project
+uv run code-scanner remove ~/my-project
+```
+
+### 3. Disable Auto-Start
+
+To remove the background service:
+
+```bash
+./scripts/autostart-macos.sh disable
+```
+
+### Manual Service Management
+
+Services are created in `~/Library/LaunchAgents/`. You can control them with `launchctl`:
+
+```bash
 # Check status
-launchctl list | grep code-scanner
+launchctl list | grep com.codescanner.service
 
-# View logs
-tail -f /tmp/code-scanner.out
+# Unload (stop)
+launchctl unload ~/Library/LaunchAgents/com.codescanner.service.plist
 ```
 
 ## Troubleshooting

@@ -59,18 +59,49 @@ See `examples/` directory for configs tailored to JavaScript, Java, C++, Android
    - **Crucial**: Set "Context Overlap" to 0 and **"Context Length"** to at least **16384** in the right sidebar
    - Click "Start Server"
 
-2. **Run the scanner**
-   ```bash
-   uv run code-scanner /path/to/your/project
-   ```
+### Running the Scanner
 
-3. **View results**
-   
-   Results are saved to `code_scanner_results.md` in your project directory.
+The scanner now runs as a **background service** (daemon) that can watch multiple projects simultaneously.
 
-4. **Stop the scanner**
-   
-   Press `Ctrl+C`. The scanner runs continuously until interrupted.
+#### 1. Start the Service
+You can run the service manually or via auto-start (see below).
+
+```bash
+uv run code-scanner service
+```
+
+#### 2. Add Projects to Watch
+Once the service is running, you can add projects to it. The service will persist these settings across restarts.
+
+```bash
+# Add a project (starts monitoring immediately)
+uv run code-scanner add /path/to/your/project --config /path/to/config.toml
+
+# List active projects
+uv run code-scanner list
+
+# Remove a project
+uv run code-scanner remove /path/to/your/project
+```
+
+#### 3. MCP Integration (AI IDEs)
+Code Scanner provides an **MCP (Model Context Protocol)** server that allows AI IDEs (Cursor, Windsurf, etc.) to fetch issues directly.
+
+To use it, configure your IDE to spawn:
+`uv run code-scanner mcp`
+
+The server exposes:
+- Resource: `code-scanner://issues` (JSON list of all detected issues)
+
+For detailed configuration examples (Cursor, Windsurf, Claude Desktop), see [docs/mcp-setup.md](docs/mcp-setup.md).
+
+### Auto-Start on Boot
+
+To automatically start the background service when you log in, please refer to the platform-specific guides:
+
+- **[Linux](docs/linux-setup.md)**
+- **[macOS](docs/macos-setup.md)**
+- **[Windows](docs/windows-setup.md)**
 
 ## Documentation
 
@@ -79,7 +110,14 @@ For detailed platform-specific setup instructions:
 - **[macOS Setup](docs/macos-setup.md)**
 - **[Windows Setup](docs/windows-setup.md)**
 
-## Supported LLM Backends
+## Troubleshooting
+
+**Logs:**
+- Daemon logs: `~/.code-scanner/service.log`
+- Project logs: `code_scanner.log` (in project root)
+
+If the service fails to start, check the Daemon log for "Port 8485 busy" or other errors.
+
 
 | Backend | Best For | Installation |
 |---------|----------|--------------|
@@ -164,16 +202,16 @@ Common values:
 ## CLI Options
 
 ```
-code-scanner [OPTIONS] TARGET_DIRECTORY
+```
+code-scanner [command] [options]
 
-Arguments:
-  TARGET_DIRECTORY    Project directory to scan (must be a Git repository)
-
-Options:
-  -c, --config PATH   Path to config.toml (default: config.toml in scanner directory)
-  --commit HASH       Scan changes relative to specific commit
-  --version           Show version
-  --help              Show help message
+Commands:
+  service                   Start the background daemon
+  add <path> [-c config]    Add a project to monitor
+  remove <path>             Stop monitoring a project
+  list                      List monitored projects
+  mcp                       Start MCP server (Stdio)
+```
 ```
 
 ## Troubleshooting
@@ -200,7 +238,12 @@ Options:
 
 ### Lock File
 
-The scanner creates `.code_scanner.lock` in the scanner's directory to prevent multiple instances. It's automatically removed on exit (Ctrl+C, SIGTERM, or normal exit).
+### Lock File
+
+The scanner creates a lock file in `~/.code-scanner/locks/` named with a hash of the target directory path. This ensures:
+- Only one instance runs per target directory.
+- Multiple instances can run for different directories.
+- Stale locks from crashed processes are automatically detected and cleaned up.
 
 ### LLM Compatibility
 

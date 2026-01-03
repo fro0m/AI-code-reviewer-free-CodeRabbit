@@ -165,8 +165,6 @@ port = 1234
         
         assert config.output_path == temp_dir / "code_scanner_results.md"
         assert config.log_path == temp_dir / "code_scanner.log"
-        # Lock file is in scanner's script directory, not target directory
-        assert config.lock_path.name == ".code_scanner.lock"
 
     def test_unsupported_section_raises_error(self, temp_dir: Path):
         """Test that unsupported top-level sections raise ConfigError."""

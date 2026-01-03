@@ -15,6 +15,10 @@ The primary objective of this project is to implement a software program that **
 *   **Cross-Platform:** The scanner must be **cross-platform**, supporting Windows, macOS, and Linux.
 *   **Interactive Mode Only:** The scanner is designed for **interactive terminal use only**. Non-interactive environments (CI, daemons) are not supported.
 *   **Continuous Scanning by Default:** The scanner runs in continuous monitoring mode automatically—there is no separate "watch mode" flag. Once started, it monitors for changes and scans indefinitely until manually stopped (`Ctrl+C`).
+*   **System Log Destination:** Internal system logs are written to:
+    *   **Service Log:** `~/.code-scanner/service.log` (Daemon logs)
+    *   **Project Log:** `code_scanner.log` in the target directory (Scan specific logs)
+*   **Colored Console Output:** Console log messages use **ANSI color codes** (when running interactively).
 *   **Passive Operation:** The scanner operates as a **passive background tool** that only reports issues to a log file. It does **not** modify any source files in the target directory.
 *   **Success Criteria:** 
     *   Ability to accurately identify issues based on user-provided queries in a configuration file.
@@ -114,37 +118,26 @@ The primary objective of this project is to implement a software program that **
     *   **Timestamp** (when the issue was detected)
     *   **Check query prompt** (which check/query caused this issue)
 *   **Output Organization:** Issues are grouped **by file**. Within each file section, each issue specifies which query/check caused it.
-*   **State Management & Persistence:** The system must maintain an internal model of detected issues **in memory only**.
-    *   **No Persistence Across Restarts:** State is **not persisted** to disk. Each scanner session starts fresh.
-    *   **Overwrite Confirmation:** On startup, if `code_scanner_results.md` exists, **prompt the user** (interactive only) to confirm deletion/overwrite. If the user declines (answers "No"), the application must **exit immediately**.
-    *   **In-Session Tracking:** Smart matching, deduplication, and resolution tracking apply **within a single session** only.
-    *   **Lock File:** The scanner must create a lock file named **`.code_scanner.lock`** in the **scanner's script directory** (not the target directory) to prevent multiple instances from running simultaneously.
-        *   **Stale Locks:** If a lock file exists, **fail with a clear error message**. The user must **manually delete** the file if it is stale (e.g., after a crash). There is no automatic stale lock detection.
-    *   **Smart Matching & Deduplication:** Issues are tracked primarily by **file** and **issue nature/description/code pattern**, not strictly by line number.
-        *   **Matching Algorithm:** Issue matching compares the source code snippet with **whitespace-normalized comparison** (truncating/collapsing spaces). This algorithm may be improved in future versions.
-        *   If an issue is detected at a different line number (e.g., due to code added above it) but matches an existing open issue's pattern, the scanner must **update the line number** in the existing record rather than creating a duplicate or resolving/re-opening.
-    *   **Resolution Tracking:** If the scanner determines that a previously reported issue is no longer present (fixed), it must update the status of that issue in the output to **"RESOLVED"**. The original entry should remain for historical context, but its status changes.
-    *   **Resolved Issues Lifecycle:** Resolved issues remain in the log **indefinitely** for historical tracking. Users may manually remove them if desired.
-    *   **Source of Truth:** The scanner is the **authoritative source** for the log file. Any manual edits by the user (e.g., deleting an "OPEN" issue) will be **overwritten** if the scanner detects that the issue still exists in the code during the next scan.
-    *   **File Rewriting:** To reflect these status updates, the scanner **rewrites the entire output file** each time the internal model changes.
-*   **Real-Time Updates:** The output file is updated **immediately** when new issues are found during scanning, not just at the end of a scan cycle. This provides instant feedback to the user.
-*   **System Verbosity:** Verbose logging is **always enabled** (no quiet mode). The output includes system information and detailed runtime data for debugging purposes.
-*   **System Log Destination:** Internal system logs (retry attempts, skipped files, warnings, debug info) are written to **both**:
-    *   **Console** (stdout/stderr) for real-time monitoring.
-    *   **Separate log file** named `code_scanner.log` in the target directory.
-*   **Colored Console Output:** Console log messages use **ANSI color codes** for improved readability:
-    *   **DEBUG:** Gray/dim text for low-priority diagnostic information.
-    *   **INFO:** Cyan message with green level label for normal operation messages.
-    *   **WARNING:** Yellow highlighting for potential issues that don't stop execution.
-    *   **ERROR:** Red highlighting for errors that may affect functionality.
-    *   **CRITICAL:** Bold red for severe errors requiring immediate attention.
-    *   **Automatic Detection:** Colors are automatically disabled when output is not a TTY (e.g., piped to file).
-    *   **Environment Variables:** Respects `NO_COLOR` (disables colors) and `FORCE_COLOR` (enables colors) standards.
-    *   **File Logs:** The separate log file (`code_scanner.log`) does **not** contain color codes for clean text storage.
-*   **Graceful Shutdown:** On `Ctrl+C` (SIGINT), SIGTERM, or any termination (killing the app):
-    *   **Immediate exit** without waiting for the current query to complete.
-    *   **Lock file cleanup** is guaranteed via `atexit` handler and signal handlers.
-    *   The lock file is removed even on `sys.exit()`, exceptions, or crashes.
+    *   **State Management & Persistence:**
+        *   **Watched Projects:** The daemon **must persist** the list of monitored projects to `~/.code-scanner/state.json` to restore monitoring after a restart.
+        *   **Issue State:** Detected issues are held in memory during the session.
+    *   **Single Instance Lock:**
+        *   The daemon ensures a single instance runs by binding to a **TCP port** (default: 8485).
+        *   If the port is in use, the service refuses to start.
+    *   **Daemonization:**
+        *   The service forks into the background (double-fork technique).
+        *   Detaches from the terminal.
+        *   Standard I/O is redirected to `/dev/null`.
+        *   A **PID file** is written to `~/.code-scanner/service.pid`.
+        *   A **Log file** is written to `~/.code-scanner/service.log`.
+    *   **Graceful Shutdown:** On `Ctrl+C` or termination:
+        *   The daemon stops all child watchers.
+        *   Releases the port binding.
+    *   **Smart Matching & Deduplication:** Issues are tracked primarily by **file** and **issue nature/description/code pattern**.
+        *   **Matching Algorithm:** Issue matching compares source code snippet with **whitespace-normalized comparison**.
+        *   Line number updates are handled automatically if code shifts.
+    *   **Resolution Tracking:** Fixed issues are marked "RESOLVED" in the output file.
+    *   **File Rewriting:** The output file is rewritten to reflect status updates.
 
 ---
 

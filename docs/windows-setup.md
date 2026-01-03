@@ -189,28 +189,61 @@ LM Studio and Ollama can use NVIDIA GPUs for faster inference:
 - LM Studio supports AMD GPUs via ROCm
 - Ollama support for AMD is limited on Windows
 
-## Running as a Windows Service
+## Running as a Background Service (Auto-Start)
 
-### Using Task Scheduler
+The scanner now runs as a single background daemon (`code-scanner service`) that manages multiple projects.
 
-1. Open Task Scheduler (search in Start menu)
-2. Click "Create Basic Task"
-3. Name: "Code Scanner"
-4. Trigger: "When I log on"
-5. Action: "Start a program"
-6. Program: `C:\path\to\code-scanner\.venv\Scripts\python.exe`
-7. Arguments: `-m code_scanner --config C:\path\to\project\config.toml`
-8. Start in: `C:\path\to\project`
+### 1. Enable Auto-Start
 
-### Using NSSM (Non-Sucking Service Manager)
+To start the service automatically on login:
 
 ```powershell
-# Download NSSM from nssm.cc
-# Install as service
-nssm install CodeScanner "C:\path\to\code-scanner\.venv\Scripts\python.exe" "-m code_scanner --config C:\path\to\project\config.toml"
-nssm set CodeScanner AppDirectory "C:\path\to\project"
-nssm start CodeScanner
+.\scripts\autostart-windows.ps1 -Action Enable
 ```
+
+This creates a Scheduled Task (`CodeScannerService`) that:
+- Starts automatically when you log in.
+- Waits 10 seconds for initialization.
+- Runs in the background (hidden).
+
+### 2. Manage Monitored Projects
+
+Once the service is running, use the CLI to add projects:
+
+```powershell
+# Add a project to be watched (persistent)
+uv run code-scanner add C:\path\to\your\project --config C:\path\to\config.toml
+
+# List watched projects
+uv run code-scanner list
+
+# Stop watching a project
+uv run code-scanner remove C:\path\to\your\project
+```
+
+### 3. Disable Auto-Start
+
+To remove the scheduled task:
+
+```powershell
+.\scripts\autostart-windows.ps1 -Action Disable
+```
+
+### Manual Service Management
+
+You can manage the task via `schtasks` or the Task Scheduler UI:
+
+```powershell
+# Check status
+Get-ScheduledTask -TaskName "CodeScannerService"
+
+# Stop manually
+Stop-ScheduledTask -TaskName "CodeScannerService"
+```
+Tasks are managed in **Task Scheduler**:
+1. Open Task Scheduler (`taskschd.msc`).
+2. Look for tasks named `CodeScannerService`.
+3. You can enable, disable, or delete them manually if needed.
 
 ## Troubleshooting
 
