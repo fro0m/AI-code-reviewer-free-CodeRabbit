@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 
@@ -234,3 +235,29 @@ def _similarity_ratio(s1: str, s2: str) -> float:
     """
     from difflib import SequenceMatcher
     return SequenceMatcher(None, s1, s2).ratio()
+
+
+@dataclass
+class Project:
+    """Represents a monitored project with all its components."""
+
+    project_id: str  # Unique identifier (e.g., "project_1")
+    target_directory: Path
+    config_file: Path
+    config: "Config"
+    git_watcher: Optional["GitWatcher"] = None
+    issue_tracker: Optional["IssueTracker"] = None
+    ctags_index: Optional["CtagsIndex"] = None
+    output_generator: Optional["OutputGenerator"] = None
+    file_filter: Optional["FileFilter"] = None
+
+    # State tracking
+    last_activity_time: float = 0.0  # Unix timestamp
+    is_active: bool = False
+    last_scanned_files: set[str] = field(default_factory=set)
+    last_file_contents_hash: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def output_path(self) -> Path:
+        """Get output file path for this project."""
+        return self.target_directory / self.config.output_file

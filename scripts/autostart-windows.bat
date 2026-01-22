@@ -1,6 +1,7 @@
 @echo off
 REM Code Scanner Autostart Management - Windows (Task Scheduler)
-REM Usage: autostart-windows.bat [install|remove|status] [config_path] [target_directory]
+REM Usage: autostart-windows.bat [install|remove|status] "<cli_command>"
+REM Example: autostart-windows.bat install "C:\path\to\project1 -c C:\path\to\config1 C:\path\to\project2 -c C:\path\to\config2"
 
 setlocal enabledelayedexpansion
 
@@ -16,41 +17,26 @@ goto :usage
 :usage
 echo Code Scanner Autostart Management - Windows
 echo.
-echo Usage: %~nx0 ^<command^> [options]
+echo Usage: %~nx0 ^<command^> "<cli_command>"
 echo.
 echo Commands:
-echo   install ^<config_path^> ^<target_directory^>  Install autostart task
-echo   remove                                      Remove autostart task
-echo   status                                      Check task status
+echo   install ^<cli_command^>  Install autostart task with full CLI command
+echo   remove                      Remove autostart task
+echo   status                      Check task status
 echo.
 echo Examples:
-echo   %~nx0 install C:\path\to\config.toml C:\path\to\project
+echo   %~nx0 install "C:\path\to\project1 -c C:\path\to\config1 C:\path\to\project2 -c C:\path\to\config2"
 echo   %~nx0 remove
 echo   %~nx0 status
 exit /b 1
 
 :install
 if "%~2"=="" (
-    echo [ERROR] Missing config_path argument
-    goto :usage
-)
-if "%~3"=="" (
-    echo [ERROR] Missing target_directory argument
+    echo [ERROR] Missing CLI command argument
     goto :usage
 )
 
-set "CONFIG_PATH=%~f2"
-set "TARGET_DIR=%~f3"
-
-REM Verify files exist
-if not exist "%CONFIG_PATH%" (
-    echo [ERROR] Config file not found: %CONFIG_PATH%
-    exit /b 1
-)
-if not exist "%TARGET_DIR%\" (
-    echo [ERROR] Target directory not found: %TARGET_DIR%
-    exit /b 1
-)
+set "CLI_ARGS=%~2"
 
 REM Find code-scanner
 set "SCANNER_CMD="
@@ -64,12 +50,12 @@ if "%SCANNER_CMD%"=="" (
 )
 
 echo [INFO] Testing code-scanner launch...
-echo [INFO] Command: %SCANNER_CMD% --config "%CONFIG_PATH%" "%TARGET_DIR%"
+echo [INFO] Command: %SCANNER_CMD% %CLI_ARGS%
 echo.
 
 REM Test launch - run for 5 seconds and capture output
 set "TEST_OUTPUT=%TEMP%\code-scanner-test.txt"
-start /b cmd /c ""%SCANNER_CMD%" --config "%CONFIG_PATH%" "%TARGET_DIR%" 2>&1" > "%TEST_OUTPUT%" 2>&1
+start /b cmd /c ""%SCANNER_CMD%" %CLI_ARGS% 2>&1" > "%TEST_OUTPUT%" 2>&1
 timeout /t 5 /nobreak >nul 2>&1
 
 REM Kill any running code-scanner processes from test
@@ -80,7 +66,7 @@ REM Display output
 if exist "%TEST_OUTPUT%" (
     type "%TEST_OUTPUT%"
     echo.
-    
+
     REM Check for success indicators
     findstr /i "Scanner running Scanner loop started Scanner thread started" "%TEST_OUTPUT%" >nul 2>&1
     if not errorlevel 1 (
@@ -88,7 +74,7 @@ if exist "%TEST_OUTPUT%" (
         del "%TEST_OUTPUT%" >nul 2>&1
         goto :test_passed
     )
-    
+
     REM Check for error indicators
     findstr /i "error failed exception traceback could not cannot refused" "%TEST_OUTPUT%" >nul 2>&1
     if not errorlevel 1 (
@@ -96,7 +82,7 @@ if exist "%TEST_OUTPUT%" (
         del "%TEST_OUTPUT%" >nul 2>&1
         exit /b 1
     )
-    
+
     del "%TEST_OUTPUT%" >nul 2>&1
 )
 
@@ -133,7 +119,7 @@ set "WRAPPER_SCRIPT=%HOME_DIR%\launch-wrapper.bat"
     echo @echo off
     echo REM Code Scanner launch wrapper with startup delay
     echo timeout /t 60 /nobreak ^>nul
-    echo %SCANNER_CMD% --config "%CONFIG_PATH%" "%TARGET_DIR%"
+    echo %SCANNER_CMD% %CLI_ARGS%
 ) > "%WRAPPER_SCRIPT%"
 
 REM Create scheduled task to run at logon

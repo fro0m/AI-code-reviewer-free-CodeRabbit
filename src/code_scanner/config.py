@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from .utils import get_config_dir
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -49,8 +51,14 @@ class Config:
 
     @property
     def home_dir(self) -> Path:
-        """Get the code-scanner home directory (~/.code-scanner/)."""
-        home = Path.home() / ".code-scanner"
+        """Get the code-scanner home directory.
+        
+        Platform-specific location:
+        - Windows: %APPDATA%/code-scanner
+        - macOS: ~/Library/Application Support/code-scanner
+        - Linux/Unix: ~/.code-scanner
+        """
+        home = get_config_dir()
         home.mkdir(parents=True, exist_ok=True)
         return home
 

@@ -10,7 +10,6 @@ AI-powered code scanner that uses local LLMs (LM Studio or Ollama) to identify i
 
 ---
 
-
 ## Features
 
 - 🏠 **100% Local (Privacy first)**: Uses LM Studio or Ollama with local APIs. All processing happens on your machine, no cloud required.
@@ -18,17 +17,16 @@ AI-powered code scanner that uses local LLMs (LM Studio or Ollama) to identify i
 - 💰 **Cost Effective**: Zero token costs. Use your local resources instead of expensive API subscriptions.
 - 🔍 **Language-agnostic**: Works with any programming language.
 - 🧰 **AI Tools for Context Expansion**: LLM can interactively request additional codebase information (find usages, read files, list directories) for sophisticated architectural checks.
-- ⚡ **Continuous Monitoring**: Runs in background mode, monitoring Git changes every 30 seconds and scanning indefinitely until stopped.
+- ⚡ **Continuous Monitoring**: Runs in background mode, monitoring Git changes every 30 seconds and scanning indefinitely until stopped (`Ctrl+C`).
 - 🔄 **Smart Change Detection**: Efficient git status caching with configurable TTL prevents redundant git operations. When changes are detected mid-scan, continues from current check with refreshed file contents (preserves progress).
 - 🔧 **Configurable Checks**: Define checks in plain English via TOML configuration with file pattern support.
 - 📊 **Issue Tracking**: Tracks issue lifecycle (new, existing, resolved) with scoped resolution—issues are only resolved for files that were actually scanned.
 - 📝 **Real-time Updates**: Output file updates immediately when issues are found (not just at end of scan).
 - 🛡️ **Hallucination Prevention**: Validates file paths from LLM responses with helpful suggestions for similar files when paths don't exist.
-- 📍 **Smart Error Messages**: When files are not found, suggests similar files using fuzzy matching (e.g., "Did you mean: main.py, utils.py?").
-- 🤖 **Daemon-Ready**: Fully uninteractive mode—no prompts, configurable via file only. Supports autostart on all platforms.
+- 📖 **Daemon-Ready**: Fully uninteractive mode—no prompts, configurable via file only. Supports autostart on all platforms.
 - ✅ **Well-Tested**: 92% code coverage with 905 unit tests ensuring reliability and maintainability.
 
-![Scanner Workflow](images/workflow.png)
+---
 
 ## Quick Start
 
@@ -38,83 +36,163 @@ AI-powered code scanner that uses local LLMs (LM Studio or Ollama) to identify i
 2. **Git** (for tracking file changes)
 3. **Universal Ctags** (for symbol indexing)
 4. **ripgrep** (for fast code search)
-5. **[LM Studio](https://lmstudio.ai)** or **[Ollama](https://ollama.ai)** - Local LLM backend
 
-See [Documentation](#documentation) below for detailed platform-specific installation guides.
+### Configuration Reference
 
-### Quick Installation
+### Basic Configuration
 
-```bash
-# Install UV (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+**For Ollama:**
+```toml
+[llm]
+backend = "ollama"
+host = "localhost"
+port = 11434
+model = "qwen3:4b"
+timeout = 120
+context_limit = 16384  # Required
 
-# Clone the repository
-git clone https://github.com/ubego/Code-Scanner.git
-cd Code-Scanner
-
-# Install dependencies
-uv sync
+[[checks]]
+pattern = "*"
+checks = [
+    "Check for bugs and issues."
+]
 ```
 
-### Configuration
+**For LM Studio:**
+```toml
+[llm]
+backend = "lm-studio"
+host = "localhost"
+port = 1234
+# model = "specific-model-name"  # Optional for LM Studio
+context_limit = 32768
 
-Copy a language-specific example from `examples/` to your project root:
-
-```bash
-cp examples/python-config.toml code_scanner_config.toml
+[[checks]]
+pattern = "*.cpp, *.h"
+checks = [
+    "Check for memory leaks",
+    "Check that RAII is used properly"
+]
 ```
 
-See `examples/` directory for configs tailored to JavaScript, Java, C++, Android, iOS, and more.
+---
 
-### Running Your First Scan
+## Multi-Project Support
 
-1. **Start LM Studio**
-   - Open LM Studio
-   - Search for "qwen2.5-coder-7b-instruct" and download it
-   - Click the "<->" icon to open Local Server tab
-   - **Crucial**: Set "Context Overlap" to 0 and **"Context Length"** to at least **16384** in the right sidebar
-   - Click "Start Server"
+The scanner can monitor **multiple directories (projects) simultaneously** and automatically switch between them based on most recent changes.
 
-2. **Run the scanner**
-   ```bash
-   uv run code-scanner /path/to/your/project
-   ```
+### CLI Format
 
-3. **View results**
-   
-   Results are saved to `code_scanner_results.md` in your project directory.
+Supports multiple project-config pairs specified at startup:
 
-4. **Stop the scanner**
-   
-   Press `Ctrl+C`. The scanner runs continuously until interrupted.
+```bash
+# Single project (backward compatible)
+code-scanner /path/to/project -c /path/to/config.toml
 
-5. **(Optional) Enable autostart**
-   
-   To start the scanner automatically on login:
-   ```bash
-   # Linux
-   ./scripts/autostart-linux.sh
-   
-   # macOS
-   ./scripts/autostart-macos.sh
-   
-   # Windows
-   scripts\autostart-windows.bat
-   ```
+# Multiple projects
+code-scanner /path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2
+
+# With default configs
+code-scanner /path/to/project1 /path/to/project2
+
+# With commit hashes
+code-scanner /path/to/project1 --commit abc123 -c /path/to/config1 /path/to/project2 --commit def456
+```
+
+*   Each project can have its own configuration file
+*   Configs can be specified using `-c` flag or defaults to `code_scanner_config.toml` in each project directory
+*   **Active Project Selection:** The project with the **most recent changes** becomes active for checks
+    *   Uses existing git change detection algorithm (max mtime_ns among changed files)
+    *   Project switching is **non-blocking** - waits for current check to complete
+*   **State Preservation:** Each project maintains its own state:
+    *   Issue tracker state is preserved in memory for each project
+    *   Switching between projects is seamless - previous project state is retained
+    *   State is **not persisted** across restarts (starts fresh each time)
+*   **LLM Client Management:**
+    *   **Smart Switching:** LLM client is **only disconnected and reconnected** when configs differ
+    *   **Client Reuse:** If configs are same, existing client is reused (avoids unnecessary reconnections)
+    *   **Config Comparison:** Compares backend, host, port, model, and context_limit
+*   **Output Files:** Each project has its own output file:
+    *   `code_scanner_results.md` in each project directory
+    *   Separate results per project for clear separation
+*   **Logging:** Single global log file with project prefixes:
+    *   Log file location (platform-specific):
+        *   Windows: `%APPDATA%\code-scanner\code_scanner.log`
+        *   macOS: `~/Library/Application Support/code-scanner/code_scanner.log`
+        *   Linux/Unix: `~/.code-scanner/code_scanner.log`
+    *   Project prefixes: `[project_0]`, `[project_1]`, etc.
+    *   System messages use `[SYSTEM]` prefix
+    *   INFO-level logging for project switching (not DEBUG)
+*   **Ctags Indexing:** Only active project's ctags index is generated:
+    *   Index is regenerated when switching projects
+    *   Inactive projects do not maintain ctags index (saves memory)
+*   **Single Instance:** One scanner instance monitors all projects:
+    *   Single global lock file (platform-specific):
+        *   Windows: `%APPDATA%\code-scanner\code_scanner.lock`
+        *   macOS: `~/Library/Application Support/code-scanner/code_scanner.lock`
+        *   Linux/Unix: `~/.code-scanner/code_scanner.lock`
+    *   Prevents multiple scanner instances running simultaneously
+*   **Use Case:** User works on one project, then switches to another project without restarting code scanner:
+    *   All projects are specified at startup
+    *   User doesn't need to restart with different project/config
+    *   Seamless switching preserves work context
+
+### Autostart Scripts
+
+All autostart scripts now accept a **full CLI command string** as a single argument. The script automatically detects the code-scanner executable.
+
+**Linux:**
+```bash
+./scripts/autostart-linux.sh install "/path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2"
+```
+
+**macOS:**
+```bash
+./scripts/autostart-macos.sh install "/path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2"
+```
+
+**Windows:**
+```batch
+scripts\autostart-windows.bat install "/path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2"
+```
+
+### Project Switching
+
+When you switch between projects:
+
+1. **Automatic:** The scanner automatically detects which project has the most recent changes and switches to it
+2. **Non-blocking:** The current check completes before switching (no interruption)
+3. **LLM Client:** If configs differ, old client is disconnected and new one is created. If configs are same, existing client is reused
+4. **State:** Previous project state is retained in memory (issues, last scan time, etc.)
+5. **Logging:** INFO-level messages show when projects switch (e.g., `[project_0] Switched to active project`)
+
+### Benefits
+
+*   **No Restart Required:** Switch between projects seamlessly without restarting code scanner
+*   **Work Context Preserved:** Continue working on project2 while project1's state is preserved in memory
+*   **Efficient LLM Usage:** Client is only disconnected/reconnected when necessary (avoids unnecessary reconnections)
+*   **Clear Separation:** Each project has its own output file and results are clearly separated
+
+---
 
 ## Documentation
 
 For detailed platform-specific setup instructions (including autostart configuration):
-- **[Linux Setup](docs/linux-setup.md)**
-- **[macOS Setup](docs/macos-setup.md)**
-- **[Windows Setup](docs/windows-setup.md)**
+
+*   **[Linux Setup](docs/linux-setup.md)**
+*   **[macOS Setup](docs/macos-setup.md)**
+*   **[Windows Setup](docs/windows-setup.md)**
+
+---
 
 ## Supported LLM Backends
 
 | Backend | Best For | Installation |
-|---------|----------|--------------|
+|----------|--------------|
 | **[LM Studio](https://lmstudio.ai)** | GUI users, trying different models | Download from lmstudio.ai |
 | **[Ollama](https://ollama.ai)** | CLI users, automation, simpler setup | `curl -fsSL https://ollama.ai/install.sh \| sh` |
+
+---
 
 ## Configuration Reference
 
@@ -132,7 +210,9 @@ context_limit = 16384  # Required
 
 [[checks]]
 pattern = "*"
-checks = ["Check for bugs and issues."]
+checks = [
+    "Check for bugs and issues."
+]
 ```
 
 **For LM Studio:**
@@ -141,225 +221,32 @@ checks = ["Check for bugs and issues."]
 backend = "lm-studio"
 host = "localhost"
 port = 1234
-timeout = 120
-context_limit = 16384  # Required
+# model = "specific-model-name"  # Optional for LM Studio
+context_limit = 32768
 
 [[checks]]
-pattern = "*"
-checks = ["Check for bugs and issues."]
-```
-
-### Check Groups
-
-Checks are organized into **groups**, each with a file pattern and list of rules:
-
-```toml
-# C++/Qt specific checks
-[[checks]]
-pattern = "*.cpp, *.h, *.cxx, *.hpp"
+pattern = "*.cpp, *.h"
 checks = [
-    "Check for any detectable errors and suggest code simplifications where possible.",
-    "Check that stack allocation is preferred over heap allocation whenever possible.",
-]
-
-# General checks for all files
-[[checks]]
-pattern = "*"
-checks = [
-    "Check for unused files or dead code.",
-    "Check for architectural violations (e.g., layers accessing each other incorrectly).",
+    "Check for memory leaks",
+    "Check that RAII is used properly"
 ]
 ```
 
-**Advanced checks using AI Tools:**
-```toml
-# Checks that leverage AI's ability to explore the codebase
-[[checks]]
-pattern = "*.py"
-checks = [
-    "Find duplicate or very similar function implementations that could be refactored.",
-    "Verify all database queries use parameterized statements (check all files).",
-    "Check for inconsistent naming conventions across modules.",
-]
-```
-
-**Pattern syntax:**
-- `"*.cpp, *.h"` - Match multiple extensions (comma-separated)
-- `"*"` - Match all files
-- `"src/*.py"` - Match files in specific directories
-- `"/*tests*/"` - Match files in directories containing 'tests'
-- `"/*3rdparty*/, /*vendor*/"` - Match files in third-party directories
-- `"/*build*/, /*cmake-build-*/"` - Match build output directories
-
-### Ignore Patterns
-
-Files matching patterns with an **empty checks list** will be ignored during scanning. This is useful for excluding documentation files, test directories, third-party code, or build artifacts:
-
-```toml
-# Ignore documentation, config files, tests, and third-party code
-[[checks]]
-pattern = "*.md, *.txt, *.json, /*tests*/, /*3rdparty*/, /*vendor*/, /*build*/"
-checks = []
-```
-
-**Directory pattern syntax:** Use `/*dirname*/` to match files in directories:
-- `/*tests*/` - Files in any directory named 'tests'
-- `/*node_modules*/` - Files in node_modules (at any depth)
-- `/*cmake-build-*/` - Files in cmake-build-debug, cmake-build-release, etc.
-
-The scanner uses a **unified filtering architecture** that applies all exclusion rules in a single pass:
-1. **Scanner output files** - Always excluded (O(1) set lookup)
-2. **Config ignore patterns** - Applied via fnmatch
-3. **Gitignore patterns** - Applied via in-memory pathspec matching
-
-This eliminates redundant subprocess calls and multiple filtering passes, improving performance on large repositories.
-
-### Context Limit (Required)
-
-The `context_limit` parameter is **required** and specifies the context window size (in tokens) of your LLM.
-
-> **⚠️ Warning:** Setting `context_limit` below 16384 is not recommended. The scanner needs context space for system prompts (~1000-2000 tokens), response buffer (~500-1000 tokens), and actual source code.
-
-```toml
-[llm]
-context_limit = 16384  # Required - recommended minimum
-```
-
-Common values:
-- 16384 - **Recommended minimum**
-- 32768 - Large context models (Llama 3, Qwen, etc.)
-- 131072 - Very large context models (GPT-4, Claude, etc.)
-
-## CLI Options
-
-```
-code-scanner [OPTIONS] TARGET_DIRECTORY
-
-Arguments:
-  TARGET_DIRECTORY    Project directory to scan (must be a Git repository)
-
-Options:
-  -c, --config PATH   Path to config file (default: code_scanner_config.toml in target directory)
-  --commit HASH       Scan changes relative to specific commit
-  --version           Show version
-  --help              Show help message
-```
-
-## Troubleshooting
-
-### "Cannot connect to LLM backend"
-
-1. Ensure your LLM backend is running
-2. Check the host and port in your config match the running server
-3. For Ollama: `curl http://localhost:11434/api/tags`
-4. For LM Studio: `curl http://localhost:1234/v1/models`
-
-### Connection Lost During Scan
-
-If the LLM backend becomes unavailable during scanning (e.g., LM Studio crashes, network issues, server restart), the scanner will:
-
-1. **Pause immediately** when the connection error is detected
-2. **Retry every 10 seconds** until the connection is restored
-3. **Continue scanning** from where it left off once reconnected
-
-### Scanner Keeps Rescanning Without Code Changes
-
-The scanner automatically excludes its own output files (`code_scanner_results.md` and `code_scanner_results.md.bak`) from change detection. If you're experiencing unexpected rescans:
-
-1. **Check the logs** for "New changed files detected" or "File modified since last check" messages
-2. **Verify no other tools** are modifying files in the target directory
-3. **Check for IDE auto-save** or other processes that might be touching files
-
-The scanner uses unified file filtering (combining gitignore + config ignore patterns) throughout the entire scan lifecycle—change detection, file iteration, and issue resolution—to prevent false rescans from ignored files.
-
-This allows you to restart LM Studio or fix network issues without stopping the scanner. The scanner handles various connection errors including:
-- Lost connection
-- Connection refused
-- Connection timeout
-- Network errors
-
-### Issues Being Marked as Resolved Incorrectly
-
-If issues are being marked as "Resolved" even when code hasn't changed:
-
-1. **Check your `context_limit`** - Make sure the value in your config matches or is less than your LLM server's actual context limit. A mismatch can cause the LLM to lose context and produce inconsistent results.
-2. **LLM non-determinism** - The scanner only resolves issues for files that were actually scanned in the current cycle. Issues for unscanned files remain unchanged.
-
-### "Model not found" (Ollama)
-
-1. Pull the model: `ollama pull model-name`
-2. List available models: `ollama list`
-
-### "Context length exceeded"
-
-1. Use a model with larger context window
-2. Reduce `context_limit` in your config to force smaller batches
-3. Use `.gitignore` to exclude large generated files
-
-## Technical Details
-
-### Lock File
-
-The scanner creates `~/.code-scanner/code_scanner.lock` (global location) to prevent multiple instances. The lock file stores the PID of the running process and automatically detects/removes stale locks from crashed processes. It's automatically removed on exit (Ctrl+C, SIGTERM, or normal exit).
-
-### LLM Compatibility
-
-- **JSON response format**: Uses `response_format={"type": "json_object"}` if supported
-- **Auto-correction**: If LLM returns non-JSON, the scanner asks it to reformat
-- **Context limit**: Required in config file (no interactive prompts)
-
-### Excluded Files
-
-The scanner uses a **unified file filtering system** that combines all exclusion rules for efficiency:
-
-**Scanner Output Files** (always excluded):
-- `code_scanner_results.md` - The output report
-- `code_scanner_results.md.bak` - The backup file
-- `code_scanner.log` - The log file
-
-**Config Ignore Patterns**:
-- Files matching patterns in check groups with empty `checks = []`
-- Supports file extensions (e.g., `*.md, *.txt`) and directory patterns (e.g., `/*tests*/`)
-- Example: `*.md, *.txt, /*tests*/, /*vendor*/` for docs and third-party code
-
-**Gitignore Patterns**:
-- Files matching `.gitignore` are excluded via in-memory pattern matching
-- No subprocess calls - uses the `pathspec` library for efficiency
-
-### Backup Files
-
-On startup, if `code_scanner_results.md` exists, its content is automatically appended to `code_scanner_results.md.bak` with a timestamp. The scanner then starts with a fresh empty results file. This preserves previous results for reference without requiring user confirmation.
+---
 
 ## Development
 
-### Running Tests
-
-```bash
-uv run pytest                    # Run all tests
-uv run pytest -v                 # Verbose output
-uv run pytest tests/test_scanner.py -v  # Specific file
-```
-
-### Coverage Reports
-
-```bash
-uv run pytest --cov=code_scanner --cov-report=term-missing
-uv run pytest --cov=code_scanner --cov-report=html  # Open htmlcov/index.html
-```
-
-**Current Coverage:** 91% with 873 tests.
-
 ### Project Structure
 
-```
+```bash
 src/code_scanner/
 ├── models.py        # Data models (LLMConfig, Issue, etc.)
 ├── config.py        # Configuration loading and validation
 ├── base_client.py   # Abstract base class for LLM clients
 ├── lmstudio_client.py # LM Studio client
 ├── ollama_client.py # Ollama client
-├── ai_tools.py      # AI tool executor for function calling
-├── text_utils.py    # Text processing utilities (fuzzy matching, validation)
+├── ai_tools.py      # AI tool executor for context expansion
+├── text_utils.py    # Text processing utilities
 ├── git_watcher.py   # Git repository monitoring
 ├── issue_tracker.py # Issue lifecycle management
 ├── output.py        # Markdown report generation
@@ -369,10 +256,36 @@ src/code_scanner/
 └── __main__.py      # Entry point
 ```
 
-## Advanced Features
-
-- **[AI Tools for Context Expansion](docs/ai-tools.md)** - How the AI can request additional codebase information for sophisticated checks
+---
 
 ## License
 
 GNU Affero General Public License v3.0
+
+---
+
+## Development
+
+### Running Tests
+
+```bash
+uv run pytest                    # Run all tests
+uv run pytest -v                 # Verbose output
+uv run pytest tests/test_scanner.py -v  # Specific file
+uv run pytest --cov=code_scanner --cov-report=term-missing  # Coverage report
+uv run pytest --cov=code_scanner --cov-report=html  # Open htmlcov/index.html
+```
+
+### Coverage Reports
+
+**Current Coverage:** 91% with 873 tests.
+
+---
+
+## Documentation
+
+For detailed platform-specific setup instructions (including autostart configuration):
+
+*   **[Linux Setup](docs/linux-setup.md)**
+*   **[macOS Setup](docs/macos-setup.md)**
+*   **[Windows Setup](docs/windows-setup.md)**

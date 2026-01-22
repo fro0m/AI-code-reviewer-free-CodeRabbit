@@ -3,23 +3,24 @@
 import logging
 import os
 import sys
+import platform
 from pathlib import Path
 
 # ANSI color codes for terminal output
 class Colors:
     """ANSI color codes for terminal coloring."""
-    
+
     RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
-    
+
     # Foreground colors
     RED = "\033[31m"
     GREEN = "\033[32m"
     YELLOW = "\033[33m"
     BLUE = "\033[34m"
     GRAY = "\033[90m"
-    
+
     # Bright foreground colors
     BRIGHT_RED = "\033[91m"
     BRIGHT_YELLOW = "\033[93m"
@@ -28,7 +29,7 @@ class Colors:
 
 class ColoredFormatter(logging.Formatter):
     """Custom formatter that adds colors to log messages based on level."""
-    
+
     # Level-specific colors
     LEVEL_COLORS = {
         logging.DEBUG: Colors.GRAY,
@@ -37,7 +38,7 @@ class ColoredFormatter(logging.Formatter):
         logging.ERROR: Colors.BRIGHT_RED,
         logging.CRITICAL: Colors.BOLD + Colors.BRIGHT_RED,
     }
-    
+
     # Level name colors (for the level label itself)
     LEVEL_NAME_COLORS = {
         logging.DEBUG: Colors.GRAY,
@@ -46,10 +47,10 @@ class ColoredFormatter(logging.Formatter):
         logging.ERROR: Colors.RED,
         logging.CRITICAL: Colors.BOLD + Colors.RED,
     }
-    
+
     def __init__(self, fmt: str | None = None, datefmt: str | None = None, use_colors: bool = True):
         """Initialize the colored formatter.
-        
+
         Args:
             fmt: Log message format string.
             datefmt: Date format string.
@@ -57,62 +58,61 @@ class ColoredFormatter(logging.Formatter):
         """
         super().__init__(fmt, datefmt)
         self.use_colors = use_colors and self._supports_color()
-    
+
     @staticmethod
     def _supports_color() -> bool:
         """Check if the terminal supports colors."""
         # Check if output is a TTY
         if not hasattr(sys.stderr, "isatty") or not sys.stderr.isatty():
             return False
-        
+
         # Check for NO_COLOR environment variable (standard for disabling colors)
         if os.environ.get("NO_COLOR"):
             return False
-        
+
         # Check for FORCE_COLOR environment variable
         if os.environ.get("FORCE_COLOR"):
             return True
-        
+
         # Check terminal type
         term = os.environ.get("TERM", "")
         if term == "dumb":
             return False
-        
+
         # Most modern terminals support colors
         return True
-    
+
     def format(self, record: logging.LogRecord) -> str:
         """Format the log record with colors.
-        
+
         Args:
             record: The log record to format.
-            
+
         Returns:
             Formatted and colored log string.
         """
         if not self.use_colors:
             return super().format(record)
-        
+
         # Get colors for this level
         level_color = self.LEVEL_COLORS.get(record.levelno, "")
         level_name_color = self.LEVEL_NAME_COLORS.get(record.levelno, "")
-        
+
         # Color the timestamp
         original_asctime = self.formatTime(record, self.datefmt)
         colored_asctime = f"{Colors.DIM}{original_asctime}{Colors.RESET}"
-        
+
         # Color the level name
         colored_levelname = f"{level_name_color}{record.levelname:8}{Colors.RESET}"
-        
+
         # Color the logger name
         colored_name = f"{Colors.BLUE}{record.name}{Colors.RESET}"
-        
+
         # Color the message
         colored_message = f"{level_color}{record.getMessage()}{Colors.RESET}"
-        
+
         # Build the formatted string
         return f"{colored_asctime} - {colored_name} - {colored_levelname} - {colored_message}"
-
 
 # Known binary file extensions
 BINARY_EXTENSIONS = frozenset({
@@ -139,6 +139,33 @@ BINARY_EXTENSIONS = frozenset({
 CHARS_PER_TOKEN = 4
 
 logger = logging.getLogger(__name__)
+
+
+def get_config_dir() -> Path:
+    """Get the platform-specific configuration directory for code-scanner.
+    
+    Returns:
+        Path to the configuration directory:
+        - Windows: %APPDATA%/code-scanner (Roaming)
+        - macOS: ~/Library/Application Support/code-scanner
+        - Linux/Unix: ~/.code-scanner
+    """
+    system = platform.system()
+    
+    if system == "Windows":
+        # Use APPDATA (Roaming) for Windows
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "code-scanner"
+        else:
+            # Fallback to home directory
+            return Path.home() / ".code-scanner"
+    elif system == "Darwin":
+        # macOS: ~/Library/Application Support
+        return Path.home() / "Library" / "Application Support" / "code-scanner"
+    else:
+        # Linux/Unix: ~/.code-scanner
+        return Path.home() / ".code-scanner"
 
 
 def is_binary_file(file_path: Path) -> bool:
@@ -209,25 +236,23 @@ def read_file_content(file_path: Path) -> str | None:
         return None
 
 
-
-
-
-def setup_logging(log_file: Path, debug: bool = False) -> None:
+def setup_logging(log_file: Path, debug: bool = False, project_manager=None) -> None:
     """Set up logging to both console and file.
 
     Args:
         log_file: Path to the log file.
         debug: If True, set DEBUG level for both console and file.
                If False, set INFO level for both.
+        project_manager: Optional ProjectManager for project prefix support.
     """
     log_level = logging.DEBUG if debug else logging.INFO
-    
+
     # Create formatter for file (no colors)
     file_formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    
+
     # Create colored formatter for console
     console_formatter = ColoredFormatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -236,11 +261,11 @@ def setup_logging(log_file: Path, debug: bool = False) -> None:
 
     # Root logger
     root_logger = logging.getLogger()
-    
+
     # Remove existing handlers to prevent duplicates on repeated calls
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
-    
+
     root_logger.setLevel(log_level)
 
     # Console handler (with colors)
@@ -262,6 +287,29 @@ def setup_logging(log_file: Path, debug: bool = False) -> None:
     # These retry messages from OpenAI client are confusing without context
     logging.getLogger("openai._base_client").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    # Set up project prefix filter if project manager is provided
+    if project_manager:
+        # Add a filter that adds project prefixes to log records
+        class ProjectPrefixFilter(logging.Filter):
+            """Filter that adds project prefix to log records."""
+
+            def __init__(self, project_manager):
+                super().__init__()
+                self.project_manager = project_manager
+
+            def filter(self, record):
+                """Add project prefix to log record."""
+                active_project = self.project_manager.get_active_project()
+                if active_project:
+                    # Add project prefix to the message
+                    record.msg = f"[{active_project.project_id}] {record.msg}"
+                else:
+                    record.msg = f"[SYSTEM] {record.msg}"
+                return True
+
+        # Add filter to root logger
+        root_logger.addFilter(ProjectPrefixFilter(project_manager))
 
 
 def group_files_by_directory(files: list[str]) -> dict[str, list[str]]:
@@ -293,4 +341,3 @@ def group_files_by_directory(files: list[str]) -> dict[str, list[str]]:
     )
 
     return sorted_groups
-

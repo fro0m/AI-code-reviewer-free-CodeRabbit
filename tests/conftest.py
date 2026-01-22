@@ -102,10 +102,11 @@ port = 1234
 context_limit = 16384
 """)
     
+    from code_scanner.models import CheckGroup
     return Config(
         target_directory=temp_dir,
         config_file=config_file,
-        checks=["Check for errors", "Check for style issues"],
+        check_groups=[CheckGroup(pattern="*", checks=["Check for errors", "Check for style issues"])],
         llm=LLMConfig(backend="lm-studio", host="localhost", port=1234, context_limit=16384),
     )
 

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Code Scanner Autostart Management - macOS (LaunchAgents)
-# Usage: ./autostart-macos.sh [install|remove|status] [config_path] [target_directory]
+# Usage: ./autostart-macos.sh [install|remove|status] "<cli_command>"
+# Example: ./autostart-macos.sh install "/path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2"
 
 set -e
 
@@ -23,15 +24,15 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 usage() {
     echo "Code Scanner Autostart Management - macOS"
     echo ""
-    echo "Usage: $0 <command> [options]"
+    echo "Usage: $0 <command> \"<cli_command>\""
     echo ""
     echo "Commands:"
-    echo "  install <config_path> <target_directory>  Install autostart service"
-    echo "  remove                                     Remove autostart service"
-    echo "  status                                     Check service status"
+    echo "  install \"<cli_command>\"  Install autostart service with full CLI command"
+    echo "  remove                      Remove autostart service"
+    echo "  status                      Check service status"
     echo ""
     echo "Examples:"
-    echo "  $0 install /path/to/config.toml /path/to/project"
+    echo "  $0 install \"/path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2\""
     echo "  $0 remove"
     echo "  $0 status"
     exit 1
@@ -50,33 +51,32 @@ find_code_scanner() {
 }
 
 test_launch() {
-    local config_path="$1"
-    local target_dir="$2"
-    local scanner_cmd="$3"
-    
+    local scanner_cmd="$1"
+    local cli_args="$2"
+
     print_info "Testing code-scanner launch..."
-    print_info "Command: $scanner_cmd --config \"$config_path\" \"$target_dir\""
+    print_info "Command: $scanner_cmd $cli_args"
     echo ""
-    
+
     # Run for 5 seconds, capture output
     local output
-    output=$(timeout 5s $scanner_cmd --config "$config_path" "$target_dir" 2>&1 | head -30) || true
-    
+    output=$(timeout 5s $scanner_cmd $cli_args 2>&1 | head -30) || true
+
     echo "$output"
     echo ""
-    
+
     # Check for success indicators
     if echo "$output" | grep -q "Scanner running\|Scanner loop started\|Scanner thread started"; then
         print_success "Test launch succeeded - scanner started correctly."
         return 0
     fi
-    
+
     # Check for common error patterns
     if echo "$output" | grep -qi "error\|failed\|exception\|traceback\|could not\|cannot\|refused"; then
         print_error "Test launch failed. Please fix the issues above and try again."
         exit 1
     fi
-    
+
     # No clear success or failure - warn but continue
     print_warning "Could not automatically verify launch success."
     print_warning "Please check the output above and ensure code-scanner starts correctly."
@@ -88,9 +88,8 @@ test_launch() {
 }
 
 check_legacy() {
-    local config_path="$1"
-    local target_dir="$2"
-    
+    local new_exec="$1"
+
     if [[ -f "$PLIST_FILE" ]]; then
         print_warning "Found existing autostart configuration."
         echo ""
@@ -101,7 +100,7 @@ check_legacy() {
             print_info "Installation cancelled."
             exit 0
         fi
-        
+
         # Unload old service before replacing
         print_info "Unloading existing service..."
         launchctl unload "$PLIST_FILE" 2>/dev/null || true
@@ -109,41 +108,26 @@ check_legacy() {
 }
 
 install_service() {
-    local config_path="$1"
-    local target_dir="$2"
-    
-    if [[ -z "$config_path" ]] || [[ -z "$target_dir" ]]; then
-        print_error "Missing arguments. Usage: $0 install <config_path> <target_directory>"
+    local cli_args="$1"
+
+    if [[ -z "$cli_args" ]]; then
+        print_error "Missing CLI command. Usage: $0 install \"<cli_command>\""
         exit 1
     fi
-    
-    # Resolve paths to absolute
-    config_path=$(cd "$(dirname "$config_path")" && pwd)/$(basename "$config_path")
-    target_dir=$(cd "$target_dir" && pwd)
-    
-    # Verify files exist
-    if [[ ! -f "$config_path" ]]; then
-        print_error "Config file not found: $config_path"
-        exit 1
-    fi
-    if [[ ! -d "$target_dir" ]]; then
-        print_error "Target directory not found: $target_dir"
-        exit 1
-    fi
-    
+
     # Find code-scanner
     local scanner_cmd
     scanner_cmd=$(find_code_scanner)
-    
+
     # Test launch first
-    test_launch "$config_path" "$target_dir" "$scanner_cmd"
-    
+    test_launch "$scanner_cmd" "$cli_args"
+
     # Check for legacy configuration
-    check_legacy "$config_path" "$target_dir"
-    
+    check_legacy "$scanner_cmd $cli_args"
+
     # Create LaunchAgents directory
     mkdir -p "$LAUNCH_AGENTS_DIR"
-    
+
     # Create wrapper script with 60-second delay
     local wrapper_script="$HOME/.code-scanner/launch-wrapper.sh"
     mkdir -p "$(dirname "$wrapper_script")"
@@ -151,10 +135,10 @@ install_service() {
 #!/bin/bash
 # Code Scanner launch wrapper with startup delay
 sleep 60
-exec $scanner_cmd --config "$config_path" "$target_dir"
+exec $scanner_cmd $cli_args
 EOF
     chmod +x "$wrapper_script"
-    
+
     # Create plist file
     print_info "Creating LaunchAgent plist..."
     cat > "$PLIST_FILE" << EOF
@@ -189,11 +173,11 @@ EOF
 EOF
 
     print_success "Created plist file: $PLIST_FILE"
-    
+
     # Load the service
     print_info "Loading LaunchAgent..."
     launchctl load "$PLIST_FILE"
-    
+
     print_success "Code Scanner autostart installed successfully!"
     echo ""
     print_info "Useful commands:"
@@ -208,14 +192,14 @@ remove_service() {
         print_warning "No autostart service found."
         exit 0
     fi
-    
+
     print_info "Unloading LaunchAgent..."
     launchctl unload "$PLIST_FILE" 2>/dev/null || true
-    
+
     print_info "Removing plist file..."
     rm -f "$PLIST_FILE"
     rm -f "$HOME/.code-scanner/launch-wrapper.sh"
-    
+
     print_success "Code Scanner autostart removed."
 }
 
@@ -233,7 +217,7 @@ show_status() {
 # Main
 case "${1:-}" in
     install)
-        install_service "$2" "$3"
+        install_service "$2"
         ;;
     remove)
         remove_service
