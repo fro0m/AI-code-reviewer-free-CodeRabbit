@@ -189,6 +189,34 @@ class TestApplicationCleanup:
         
         app._cleanup()  # Should not raise
 
+    def test_cleanup_sets_not_running_status(self, mock_projects):
+        """Cleanup sets all projects to NOT_RUNNING status."""
+        from code_scanner.models import ScanStatus, Project
+        
+        app = Application(mock_projects)
+        
+        # Create a mock project with output generator
+        mock_project = MagicMock(spec=Project)
+        mock_project.project_id = "test_project"
+        mock_project.output_generator = MagicMock()
+        mock_project.issue_tracker = MagicMock()
+        
+        # Add to project manager
+        app.project_manager._projects["test_project"] = mock_project
+        
+        # Call cleanup
+        app._cleanup()
+        
+        # Verify project status was set to NOT_RUNNING
+        assert mock_project.scan_status == ScanStatus.NOT_RUNNING
+        
+        # Verify output_generator.write was called to update the output file
+        mock_project.output_generator.write.assert_called_once()
+        
+        # Verify the call was made with NOT_RUNNING status
+        call_args = mock_project.output_generator.write.call_args
+        assert call_args[0][2] == ScanStatus.NOT_RUNNING  # Third argument is scan_status
+
 
 class TestParseArgsExtended:
     """Extended tests for argument parsing."""

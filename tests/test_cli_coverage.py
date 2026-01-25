@@ -461,6 +461,36 @@ class TestApplicationCleanup:
         
         app._cleanup()  # Should not raise
 
+    def test_cleanup_sets_not_running_status(self, mock_config):
+        """Cleanup sets all projects to NOT_RUNNING status."""
+        from code_scanner.models import ScanStatus, Project
+        
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
+        
+        # Create a mock project with output generator
+        mock_project = MagicMock(spec=Project)
+        mock_project.project_id = "test_project"
+        mock_project.output_generator = MagicMock()
+        mock_project.issue_tracker = MagicMock()
+        
+        # Add the mock project to the project manager
+        app.project_manager._projects["test_project"] = mock_project
+        
+        # Call cleanup
+        app._cleanup()
+        
+        # Verify set_all_projects_status was called with NOT_RUNNING
+        # The actual call happens in _cleanup, so we need to verify the project's status was set
+        assert mock_project.scan_status == ScanStatus.NOT_RUNNING
+        
+        # Verify output_generator.write was called to update the output file
+        mock_project.output_generator.write.assert_called_once()
+        
+        # Verify the call was made with NOT_RUNNING status
+        call_args = mock_project.output_generator.write.call_args
+        assert call_args[0][2] == ScanStatus.NOT_RUNNING  # Third argument is scan_status
+
 
 class TestApplicationLockFile:
     """Tests for Application lock file handling."""

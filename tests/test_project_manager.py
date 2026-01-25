@@ -203,6 +203,77 @@ class TestProjectManager:
         active = project_manager.determine_active_project()
         assert active is None
 
+    def test_set_all_projects_status(self, project_manager, mock_config):
+        """Test setting status for all projects."""
+        from code_scanner.models import ScanStatus
+        from unittest.mock import MagicMock
+        
+        # Add multiple projects with mock output generators
+        project0 = project_manager.add_project(
+            project_id="project_0",
+            target_directory=Path("/test/project0"),
+            config_file=Path("/test/config0.toml"),
+            config=mock_config,
+        )
+        project1 = project_manager.add_project(
+            project_id="project_1",
+            target_directory=Path("/test/project1"),
+            config_file=Path("/test/config1.toml"),
+            config=mock_config,
+        )
+        
+        # Add mock output generators to projects
+        project0.output_generator = MagicMock()
+        project0.issue_tracker = MagicMock()
+        project1.output_generator = MagicMock()
+        project1.issue_tracker = MagicMock()
+        
+        # Set all projects to NOT_RUNNING status
+        project_manager.set_all_projects_status(ScanStatus.NOT_RUNNING)
+        
+        # Verify both projects have NOT_RUNNING status
+        assert project0.scan_status == ScanStatus.NOT_RUNNING
+        assert project1.scan_status == ScanStatus.NOT_RUNNING
+        
+        # Verify output_generator.write was called for both projects
+        project0.output_generator.write.assert_called_once()
+        project1.output_generator.write.assert_called_once()
+        
+        # Verify the call arguments include NOT_RUNNING status
+        call_args0 = project0.output_generator.write.call_args
+        call_args1 = project1.output_generator.write.call_args
+        assert call_args0[0][2] == ScanStatus.NOT_RUNNING
+        assert call_args1[0][2] == ScanStatus.NOT_RUNNING
+
+    def test_set_all_projects_status_with_error_message(self, project_manager, mock_config):
+        """Test setting status for all projects with error message."""
+        from code_scanner.models import ScanStatus
+        from unittest.mock import MagicMock
+        
+        # Add a project with mock output generator
+        project = project_manager.add_project(
+            project_id="project_0",
+            target_directory=Path("/test/project0"),
+            config_file=Path("/test/config0.toml"),
+            config=mock_config,
+        )
+        
+        # Add mock output generator to project
+        project.output_generator = MagicMock()
+        project.issue_tracker = MagicMock()
+        
+        # Set all projects to ERROR status with error message
+        error_msg = "Connection lost"
+        project_manager.set_all_projects_status(ScanStatus.ERROR, error_message=error_msg)
+        
+        # Verify project has ERROR status and error message
+        assert project.scan_status == ScanStatus.ERROR
+        assert project.error_message == error_msg
+        
+        # Verify output_generator.write was called with ERROR status and error message
+        call_args = project.output_generator.write.call_args
+        assert call_args[0][2] == ScanStatus.ERROR  # Third argument is scan_status
+
 
 class TestLLMClientManager:
     """Tests for LLMClientManager class."""

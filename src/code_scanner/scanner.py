@@ -66,12 +66,24 @@ class Scanner:
         # Threading controls
         self._stop_event = threading.Event()
         self._refresh_event = threading.Event()  # Signals to refresh file contents
+        self._check_in_progress_event = threading.Event()  # Tracks when a check is in progress
         self._thread: Optional[threading.Thread] = None
 
-        # State
-        self._last_scanned_files: set[str] = set()  # Files scanned in last cycle
-        self._last_file_contents_hash: dict[str, int] = {}  # Hash of file contents
-        self._scan_info: dict = {}
+        # State - restore from project if available
+        if self._project and self._project.scan_info:
+            self._scan_info = self._project.scan_info.copy()
+        else:
+            self._scan_info = {}
+        
+        if self._project and self._project.last_scanned_files:
+            self._last_scanned_files = self._project.last_scanned_files.copy()
+        else:
+            self._last_scanned_files = set()
+        
+        if self._project and self._project.last_file_contents_hash:
+            self._last_file_contents_hash = self._project.last_file_contents_hash.copy()
+        else:
+            self._last_file_contents_hash = {}
 
     @property
     def tool_executor(self) -> AIToolExecutor:
@@ -101,10 +113,21 @@ class Scanner:
         logger.info("Scanner thread started")
 
     def stop(self) -> None:
-        """Stop the scanner thread."""
+        """Stop the scanner thread.
+        
+        Waits for the current check to complete before stopping.
+        """
         logger.info("Stopping scanner thread...")
         self._stop_event.set()
         self._refresh_event.set()  # Wake up if waiting
+        
+        # Wait for current check to complete (max 30 seconds)
+        if self._check_in_progress_event.is_set():
+            logger.info("Waiting for current check to complete...")
+            self._check_in_progress_event.wait(timeout=30)
+            if self._check_in_progress_event.is_set():
+                logger.warning("Timeout waiting for check to complete, forcing stop")
+        
         if self._thread is not None:
             self._thread.join(timeout=5)
         logger.info("Scanner thread stopped")
@@ -138,10 +161,16 @@ class Scanner:
         if self._project is None:
             return
 
+        # Ensure scan_status is never None - use default if not set
+        # This prevents the status line from disappearing from the output file
+        scan_status = self._project.scan_status
+        if scan_status is None:
+            scan_status = ScanStatus.INITIALIZING
+
         self.output_generator.write(
             self.issue_tracker,
             self._scan_info,
-            self._project.scan_status,
+            scan_status,
             self._project.current_check_index,
             self._project.total_checks,
             self._project.current_check_query,
@@ -250,7 +279,7 @@ class Scanner:
         
         Args:
             current_files: Set of current file paths (non-deleted).
-            git_state: Current git state.
+            git_state: Current Git state.
             
         Returns:
             True if files have changed and need rescanning.
@@ -389,9 +418,6 @@ class Scanner:
             
             return check_list
 
-        # Reset scan info for new scan cycle
-        self._scan_info = {}
-        
         # Initial build
         check_list = build_check_list()
         if not check_list:
@@ -434,6 +460,9 @@ class Scanner:
                 # Update running status with current check info
                 self._update_status(ScanStatus.RUNNING, check_idx + 1, total_checks, check)
 
+                # Signal that a check is in progress
+                self._check_in_progress_event.set()
+
                 try:
                     # Run check against filtered batches (uses fresh content per batch)
                     check_issues = self._run_check(check, filtered_batches)
@@ -448,7 +477,6 @@ class Scanner:
 
                     # Update output file after every check for incremental progress
                     self._update_output_with_status()
-
                 except ContextOverflowError as e:
                     # Context overflow despite dynamic token tracking - this indicates
                     # our token estimation or limits are miscalculated. Log as ERROR.
@@ -494,6 +522,9 @@ class Scanner:
                         # Log but continue to next check
                         logger.error(f"LLM error during check (skipping): {e}")
                         self._update_status(ScanStatus.ERROR, error_message=str(e))
+                finally:
+                    # Clear the check-in-progress event
+                    self._check_in_progress_event.clear()
 
                 # Track worktree changes - update watermark only if content actually changed
                 if self._refresh_event.is_set():
@@ -563,6 +594,16 @@ class Scanner:
         self._last_file_contents_hash = {}
         for file_path, content in files_content.items():
             self._last_file_contents_hash[file_path] = hash(content)
+        
+        # Save scan state to project for persistence across project switches
+        if self._project is not None:
+            self._project.scan_info = self._scan_info.copy()
+            self._project.last_scanned_files = self._last_scanned_files.copy()
+            self._project.last_file_contents_hash = self._last_file_contents_hash.copy()
+            logger.debug(f"Saved scan state to project: scan_info={self._scan_info}, "
+                        f"last_scanned_files={len(self._last_scanned_files)}, "
+                        f"last_file_contents_hash={len(self._last_file_contents_hash)}")
+        
         logger.info("Scan cycle complete. Waiting for new file changes...")
 
     def _filter_batches_by_pattern(
@@ -667,7 +708,7 @@ class Scanner:
         # Fallback: Get ignore patterns (check groups with empty checks)
         ignore_patterns = [
             group for group in self.config.check_groups
-            if not group.checks
+            if not group.checks  # Empty checks = ignore pattern
         ]
 
         if not ignore_patterns:
@@ -765,19 +806,19 @@ class Scanner:
                     # Split directory into individual files
                     if current_batch:
                         batches.append(current_batch)
-                        current_batch = {}
-                        current_tokens = 0
+                    current_batch = {}
+                    current_tokens = 0
 
-                    for file_path, content in dir_content.items():
-                        tokens = estimate_tokens(content)
-                        if current_tokens + tokens <= available_tokens:
-                            current_batch[file_path] = content
-                            current_tokens += tokens
-                        else:
-                            if current_batch:
-                                batches.append(current_batch)
-                            current_batch = {file_path: content}
-                            current_tokens = tokens
+                for file_path, content in dir_content.items():
+                    tokens = estimate_tokens(content)
+                    if current_tokens + tokens <= available_tokens:
+                        current_batch[file_path] = content
+                        current_tokens += tokens
+                    else:
+                        if current_batch:
+                            batches.append(current_batch)
+                        current_batch = {file_path: content}
+                        current_tokens = tokens
 
         if current_batch:
             batches.append(current_batch)
@@ -798,26 +839,28 @@ class Scanner:
         Args:
             response: Raw LLM response dictionary.
             check_query: The check query that was run.
-            batch_idx: Current batch index (for logging).
+            batch_idx: Batch index for logging.
 
         Returns:
-            List of parsed Issue objects with valid file paths.
+            List of parsed issues.
         """
-        issues_data = response.get("issues", [])
-        logger.info(f"LLM returned {len(issues_data)} issue(s) for batch {batch_idx + 1}")
-        timestamp = datetime.now(timezone.utc)
-
         parsed_issues: list[Issue] = []
         skipped_count = 0
+
+        issues_data = response.get("issues", [])
+        if not isinstance(issues_data, list):
+            logger.warning(f"Issues field is not a list: {type(issues_data)}")
+            return []
+
         for issue_data in issues_data:
             try:
                 issue = Issue.from_llm_response(
-                    issue_data,
+                    data=issue_data,
                     check_query=check_query,
-                    timestamp=timestamp,
+                    timestamp=datetime.now(timezone.utc),
                 )
                 
-                # Validate that the file path is non-empty and the file exists
+                # Validate that file path is non-empty and file exists
                 if not issue.file_path or not issue.file_path.strip():
                     logger.warning(
                         f"Skipping issue with empty file path "
@@ -853,7 +896,7 @@ class Scanner:
         """Run a single check against all batches with AI tool support.
 
         The LLM can request additional context via tools. This method handles
-        iterative tool calling until the LLM provides a final answer.
+        iterative tool calling until LLM provides a final answer.
 
         Args:
             check_query: The check query to run.
@@ -944,7 +987,7 @@ class Scanner:
         # Cap at 50 to prevent endless loops, but use context-based limit if smaller
         max_tool_iterations = min(estimated_possible_iterations, 50)
         logger.debug(f"Max tool iterations set to {max_tool_iterations} (based on context: {estimated_possible_iterations}, capped at 50)")
-        
+
         iteration = 0
 
         while iteration < max_tool_iterations:
@@ -1016,101 +1059,99 @@ class Scanner:
                                 "Provide your FINAL analysis now with issues found based on available information."
                             ),
                         })
-                        accumulated_tokens = new_total
-                        
-                        # Query without tools to force final answer
-                        response = self.llm_client.query(
-                            system_prompt=messages[0]["content"],
-                            user_prompt=messages[-1]["content"],
-                            max_retries=self.config.max_llm_retries,
-                            tools=None,  # No tools - force final answer
-                        )
-                        return self._parse_issues_from_response(response, check_query, batch_idx)
-                    
-                    # Normal case - continue with tool results
-                    messages.append({
-                        "role": "user",
-                        "content": f"Tool results:\n\n{tool_results_message}\n\nNow provide your final analysis with any issues found.",
-                    })
-                    accumulated_tokens = new_total
+                        break  # Exit tool calling loop
+                    else:
+                        messages.append({
+                            "role": "user",
+                            "content": f"Tool results:\n\n{tool_results_message}\n\n",
+                        })
 
-                    # Continue loop to get LLM's response after tool execution
-                    continue
-
-                else:
-                    # LLM provided final answer (no more tool calls)
-                    logger.debug(f"LLM provided final answer after {iteration} iteration(s)")
-                    return self._parse_issues_from_response(response, check_query, batch_idx)
+                # Check if LLM provided final answer (no more tool calls)
+                if "tool_calls" not in response:
+                    # LLM provided final answer
+                    logger.debug(f"LLM provided final answer (iteration {iteration})")
+                    break  # Exit tool calling loop
 
             except LLMClientError as e:
-                logger.error(f"Check failed after retries: {e}")
+                # LLM error - log and re-raise
+                logger.error(f"LLM client error: {e}")
                 raise
 
-        # Max iterations reached
-        logger.warning(f"Max tool iterations ({max_tool_iterations}) reached, using last response")
-        return []
+        # Parse issues from LLM response
+        parsed_issues = self._parse_issues_from_response(
+            response=response,
+            check_query=check_query,
+            batch_idx=batch_idx,
+        )
 
-    def _format_tool_args_for_log(self, tool_name: str, arguments: dict) -> str:
+        return parsed_issues
+
+    def _format_tool_args_for_log(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Format tool arguments for compact logging.
-        
-        Creates a human-readable summary of tool arguments without
-        hardcoding specific tool names.
 
         Args:
-            tool_name: Name of the tool being called.
-            arguments: Tool arguments dictionary.
+            tool_name: Name of the tool.
+            arguments: Tool arguments.
 
         Returns:
             Compact string representation of arguments.
         """
         if not arguments:
             return "(no args)"
-        
-        # Common argument names that are good for logging
-        path_keys = ['file_path', 'directory_path', 'path']
-        search_keys = ['patterns', 'pattern', 'symbol', 'query']
-        
-        parts = []
-        
-        # Prioritize path-like arguments
-        for key in path_keys:
-            if key in arguments:
-                parts.append(str(arguments[key]))
-                break
-        
-        # Add search/pattern arguments
-        for key in search_keys:
-            if key in arguments:
-                val = arguments[key]
-                if isinstance(val, list):
-                    val = ', '.join(str(v) for v in val[:3])
-                parts.append(f"'{val}'")
-                break
-        
-        # Add line range if present
-        start = arguments.get('start_line')
-        end = arguments.get('end_line')
-        if start and end:
-            parts.append(f"lines {start}-{end}")
-        elif start:
-            parts.append(f"from line {start}")
-        
-        return ' '.join(parts) if parts else str(arguments)
+        elif tool_name == "search_text":
+            patterns = arguments.get('patterns', [])
+            if isinstance(patterns, list) and patterns:
+                # Show first 3 patterns
+                pattern_str = ', '.join(str(p) for p in patterns[:3])
+                if len(patterns) > 3:
+                    pattern_str += "..."
+                return f"patterns: {pattern_str}"
+            else:
+                query = arguments.get('query', '')
+                return f"query: {query[:50]}..."
+        elif tool_name == "get_file":
+            return f"file: {arguments.get('file_path', '')[:50]}..."
+        elif tool_name == "read_file":
+            file_path = arguments.get('file_path', '')
+            start_line = arguments.get('start_line')
+            end_line = arguments.get('end_line')
+            if start_line is not None and end_line is not None:
+                return f"{file_path[:50]}... (lines {start_line}-{end_line})"
+            elif start_line is not None:
+                return f"{file_path[:50]}... (from line {start_line})"
+            else:
+                return f"{file_path[:50]}..."
+        else:
+            return f"{len(arguments)} arg(s)"
 
-    def _format_tool_result(self, result) -> str:
-        """Format a tool result for presentation to the LLM.
+    def _format_tool_result(self, result: Any) -> str:
+        """Format tool result for logging.
 
         Args:
-            result: ToolResult object.
+            result: Tool result.
 
         Returns:
-            Formatted string representation.
+            Formatted result string.
         """
-        import json
+        # Import ToolResult to check type
+        from .ai_tools import ToolResult
 
-        if isinstance(result.data, dict):
-            return json.dumps(result.data, indent=2)
-        elif isinstance(result.data, list):
-            return json.dumps(result.data, indent=2)
+        # Check if error attribute exists and is not None
+        if isinstance(result, ToolResult) and result.error is not None:
+            return f"{result.error}"
+        elif hasattr(result, 'data') and result.data is not None:
+            # Handle different data types
+            if isinstance(result.data, str):
+                # If it's a string, return it as-is
+                return result.data
+            elif isinstance(result.data, dict):
+                # If it's a dict, convert to string representation
+                return str(result.data)
+            elif isinstance(result.data, list):
+                # If it's a list, convert to string representation
+                return str(result.data)
+            else:
+                # For other types (int, float, etc.), convert to string
+                return str(result.data)
         else:
-            return str(result.data)
+            return "no output"

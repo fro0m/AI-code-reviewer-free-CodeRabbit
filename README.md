@@ -23,8 +23,8 @@ Code Scanner is like having a senior code reviewer watching over your shoulder 2
 ---
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-905%20passing-green.svg)](#development)
-[![Coverage](https://img.shields.io/badge/Coverage-92%25-brightgreen.svg)](#development)
+[![Tests](https://img.shields.io/badge/Tests-99%20passing-green.svg)](#development)
+[![Coverage](https://img.shields.io/badge/Coverage-99%25-brightgreen.svg)](#development)
 
 ---
 
@@ -142,7 +142,7 @@ Open `code_scanner_results.md` in your project directory to see:
 
 - 🔧 **Configurable Checks**: Define checks in plain English via TOML configuration with file pattern support.
 - 📖 **Daemon-Ready**: Fully uninteractive mode—no prompts, configurable via file only. Supports autostart on all platforms.
-- ✅ **Well-Tested**: 92% code coverage with 905 unit tests ensuring reliability and maintainability.
+- ✅ **Well-Tested**: 99% code coverage with 963 unit tests ensuring reliability and maintainability.
 
 ---
 

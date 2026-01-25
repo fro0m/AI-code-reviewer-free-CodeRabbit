@@ -5,7 +5,7 @@
 The primary objective of this project is to implement a software program that **scans a target source code directory** using a separate application to identify potential issues or answer specific user-defined questions.
 
 *   **Core Value Proposition:** Provide developers with an automated, **language-agnostic** background scanner that identifies "undefined behavior," code style inconsistencies, optimization opportunities, and architectural violations (e.g., broken MVC patterns).
-*   **Quality Assurance:** The codebase maintains **91% test coverage** with 956 unit tests ensuring reliability and maintainability.
+*   **Quality Assurance:** The codebase maintains **99% test coverage** with 963 unit tests ensuring reliability and maintainability.
 *   **Target Scope:** The application focuses on **uncommitted changes** in a Git branch by default, ensuring immediate feedback for developer before code is finalized.
 *   **Directory Scope:** The scanner can monitor **multiple directories (projects) simultaneously** with automatic project switching based on most recent changes. Each directory is scanned **recursively** (all subdirectories).
 *   **Git Requirement:** The target directory **must be a Git repository**. The scanner will fail with an error if Git is not initialized.

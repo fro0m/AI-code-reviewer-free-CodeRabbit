@@ -323,6 +323,7 @@ class Project:
     is_active: bool = False
     last_scanned_files: set[str] = field(default_factory=set)
     last_file_contents_hash: dict[str, int] = field(default_factory=dict)
+    scan_info: dict = field(default_factory=dict)  # Scan progress information (checks_run, total_checks, etc.)
     
     # Scan status tracking
     scan_status: ScanStatus = ScanStatus.INITIALIZING
