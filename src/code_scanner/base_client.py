@@ -99,7 +99,14 @@ class BaseLLMClient(ABC):
         """
         pass
 
+    @abstractmethod
+    def is_connected(self) -> bool:
+        """Check if client is connected.
 
+        Returns:
+            True if connected, False otherwise.
+        """
+        pass
 
     @abstractmethod
     def wait_for_connection(self, retry_interval: int = 10) -> None:
@@ -176,3 +183,154 @@ def build_user_prompt(check_query: str, files_content: dict[str, str]) -> str:
         )
 
     return "\n".join(prompt_parts)
+
+
+class RequestBuilder:
+    """Utility class for building LLM API requests.
+    
+    Centralizes common request structure while allowing backend-specific
+    customizations through optional parameters.
+    """
+    
+    @staticmethod
+    def build_chat_request(
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        tools: Optional[list[dict[str, Any]]] = None,
+        context_limit: Optional[int] = None,
+        temperature: float = 0.1,
+        stream: bool = False,
+        **backend_options: Any
+    ) -> dict[str, Any]:
+        """Build a chat completion request dictionary.
+        
+        Args:
+            model: Model identifier to use.
+            system_prompt: System instructions for the LLM.
+            user_prompt: User message with code context.
+            tools: Optional list of tool definitions for function calling.
+            context_limit: Optional context limit in tokens.
+            temperature: Temperature parameter (default 0.1 for consistent output).
+            stream: Whether to stream responses (default False).
+            **backend_options: Backend-specific options (e.g., reasoning_effort, response_format).
+        
+        Returns:
+            Request dictionary with common structure.
+        """
+        request = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+        }
+        
+        # Add stream parameter
+        if stream:
+            request["stream"] = stream
+        
+        # Add tools if provided
+        if tools:
+            request["tools"] = tools
+        
+        # Add backend-specific options
+        request.update(backend_options)
+        
+        return request
+    
+    @staticmethod
+    def build_ollama_request(
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        tools: Optional[list[dict[str, Any]]] = None,
+        context_limit: Optional[int] = None,
+        temperature: float = 0.1,
+    ) -> dict[str, Any]:
+        """Build an Ollama-specific chat request.
+        
+        Args:
+            model: Model identifier to use.
+            system_prompt: System instructions for the LLM.
+            user_prompt: User message with code context.
+            tools: Optional list of tool definitions for function calling.
+            context_limit: Optional context limit in tokens.
+            temperature: Temperature parameter (default 0.1 for consistent output).
+        
+        Returns:
+            Request dictionary formatted for Ollama API.
+        """
+        request = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+            }
+        }
+        
+        # Add context limit if provided
+        if context_limit:
+            request["options"]["num_ctx"] = context_limit
+        
+        # Add tools if provided
+        if tools:
+            request["tools"] = tools
+        
+        return request
+    
+    @staticmethod
+    def build_openai_request(
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        tools: Optional[list[dict[str, Any]]] = None,
+        context_limit: Optional[int] = None,
+        temperature: float = 0.1,
+        reasoning_effort: str = "high",
+        response_format: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
+        """Build an OpenAI-compatible chat request (for LM Studio, etc.).
+        
+        Args:
+            model: Model identifier to use.
+            system_prompt: System instructions for the LLM.
+            user_prompt: User message with code context.
+            tools: Optional list of tool definitions for function calling.
+            context_limit: Optional context limit in tokens (passed as max_tokens).
+            temperature: Temperature parameter (default 0.1 for consistent output).
+            reasoning_effort: Reasoning effort level (default "high").
+            response_format: Optional response format specification (e.g., {"type": "json_object"}).
+        
+        Returns:
+            Request dictionary formatted for OpenAI-compatible API.
+        """
+        request = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "reasoning_effort": reasoning_effort,
+        }
+        
+        # Add tools if provided
+        if tools:
+            request["tools"] = tools
+            request["tool_choice"] = "auto"
+        
+        # Add response format if provided
+        if response_format:
+            request["response_format"] = response_format
+        
+        # Add max_tokens if context limit provided
+        if context_limit:
+            request["max_tokens"] = context_limit
+        
+        return request

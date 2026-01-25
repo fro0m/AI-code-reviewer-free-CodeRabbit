@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from code_scanner.config import Config
-from code_scanner.models import LLMConfig, Issue, IssueStatus
+from code_scanner.models import LLMConfig, Issue, IssueStatus, CheckGroup
 from code_scanner.issue_tracker import IssueTracker
 from code_scanner.ctags_index import CtagsIndex, Symbol
 from datetime import datetime
@@ -159,6 +159,26 @@ def mock_llm_client():
 def sample_qt_project_path() -> Path:
     """Get path to the sample Qt project."""
     return Path(__file__).parent / "sample_qt_project"
+
+
+@pytest.fixture
+def mock_config(temp_dir: Path) -> MagicMock:
+    """Create a mock Config object for testing."""
+    from code_scanner.utils import get_config_dir
+    config_dir = get_config_dir()
+    
+    mock = MagicMock(spec=Config)
+    mock.target_directory = temp_dir
+    mock.config_file = temp_dir / "config.toml"
+    mock.commit_hash = None
+    mock.output_path = temp_dir / "output.md"
+    mock.output_file = "output.md"
+    mock.log_file = config_dir / "code_scanner.log"
+    mock.lock_path = config_dir / "code_scanner.lock"
+    mock.llm = LLMConfig(backend="lm-studio", host="localhost", port=1234, context_limit=16384)
+    mock.check_groups = [CheckGroup(pattern="*", checks=["Check for errors", "Check for style issues"])]
+    
+    return mock
 
 
 @pytest.fixture

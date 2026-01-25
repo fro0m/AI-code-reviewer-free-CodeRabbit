@@ -12,7 +12,7 @@ from .file_filter import FileFilter
 from .git_watcher import GitWatcher
 from .issue_tracker import IssueTracker
 from .base_client import BaseLLMClient, LLMClientError, ContextOverflowError, SYSTEM_PROMPT_TEMPLATE, build_user_prompt
-from .models import Issue, GitState, ChangedFile, CheckGroup
+from .models import Issue, GitState, ChangedFile, CheckGroup, ScanStatus, Project
 from .output import OutputGenerator
 from .utils import (
     estimate_tokens,
@@ -37,6 +37,7 @@ class Scanner:
         output_generator: OutputGenerator,
         ctags_index: CtagsIndex,
         file_filter: Optional[FileFilter] = None,
+        project: Optional[Project] = None,
     ):
         """Initialize the scanner.
 
@@ -48,6 +49,7 @@ class Scanner:
             output_generator: Output generator instance.
             ctags_index: Ctags index for symbol navigation.
             file_filter: Optional unified file filter for efficient filtering.
+            project: Optional project reference for status tracking.
         """
         self.config = config
         self.git_watcher = git_watcher
@@ -56,6 +58,7 @@ class Scanner:
         self.output_generator = output_generator
         self.ctags_index = ctags_index
         self._file_filter = file_filter
+        self._project = project
 
         # Initialize AI tool executor for context expansion
         self._tool_executor = None
@@ -106,6 +109,45 @@ class Scanner:
             self._thread.join(timeout=5)
         logger.info("Scanner thread stopped")
 
+    def _update_status(self, status: ScanStatus, check_index: int = 0, 
+                     total_checks: int = 0, check_query: str = "", 
+                     error_message: str = "") -> None:
+        """Update the project's scan status and write to output file.
+
+        Args:
+            status: The new scan status.
+            check_index: Current check index (1-based) for RUNNING status.
+            total_checks: Total number of checks for RUNNING status.
+            check_query: Current check query for RUNNING status.
+            error_message: Error message for ERROR or CONNECTION_LOST status.
+        """
+        if self._project is None:
+            return
+
+        self._project.scan_status = status
+        self._project.current_check_index = check_index
+        self._project.total_checks = total_checks
+        self._project.current_check_query = check_query
+        self._project.error_message = error_message
+
+        # Update output file with current status
+        self._update_output_with_status()
+
+    def _update_output_with_status(self) -> None:
+        """Update the output file with current project status."""
+        if self._project is None:
+            return
+
+        self.output_generator.write(
+            self.issue_tracker,
+            self._scan_info,
+            self._project.scan_status,
+            self._project.current_check_index,
+            self._project.total_checks,
+            self._project.current_check_query,
+            self._project.error_message,
+        )
+
     def _signal_refresh(self) -> None:
         """Signal the scanner to refresh file contents for the current check.
         
@@ -123,6 +165,9 @@ class Scanner:
         """Main scanner loop."""
         logger.info("Scanner loop started")
 
+        # Set initial status
+        self._update_status(ScanStatus.INITIALIZING)
+
         while not self._stop_event.is_set():
             try:
                 # Get current git state
@@ -131,12 +176,14 @@ class Scanner:
                 # Wait if merge/rebase in progress
                 if git_state.is_conflict_resolution_in_progress:
                     logger.info("Waiting for merge/rebase to complete...")
+                    self._update_status(ScanStatus.WAITING_MERGE_REBASE)
                     time.sleep(self.config.git_poll_interval)
                     continue
 
                 # Wait if no changes
                 if not git_state.has_changes:
                     logger.debug("No changes detected, waiting...")
+                    self._update_status(ScanStatus.WAITING_NO_CHANGES)
                     # Clear tracking since files were committed/reverted
                     self._last_scanned_files.clear()
                     self._last_file_contents_hash.clear()
@@ -161,6 +208,7 @@ class Scanner:
                 else:
                     # No new changes - wait for refresh signal or timeout
                     logger.debug("No new file changes since last scan, waiting...")
+                    self._update_status(ScanStatus.WAITING_NO_CHANGES)
                     was_signaled = self._refresh_event.wait(timeout=self.config.git_poll_interval)
                     self._refresh_event.clear()
                     if was_signaled:
@@ -168,6 +216,7 @@ class Scanner:
 
             except Exception as e:
                 logger.error(f"Scanner error: {e}", exc_info=True)
+                self._update_status(ScanStatus.ERROR, error_message=str(e))
                 time.sleep(5)  # Brief pause before retrying
 
         logger.info("Scanner loop ended")
@@ -287,6 +336,9 @@ class Scanner:
         # Clear file cache since we're starting a new scan with potentially changed files
         self.tool_executor.clear_file_cache()
         
+        # Set running status
+        self._update_status(ScanStatus.RUNNING)
+        
         # Log changed files at the start of scan cycle
         changed_file_paths = [f.path for f in git_state.changed_files if not f.is_deleted]
         logger.info(f"Starting scan with {len(changed_file_paths)} changed files")
@@ -351,6 +403,9 @@ class Scanner:
         all_issues: list[Issue] = []
         iteration = 0
 
+        # Initialize checks_run counter for new scan cycle
+        self._scan_info["checks_run"] = 0
+        
         # Store total_checks in scan_info for output
         self._scan_info["total_checks"] = total_checks
 
@@ -375,6 +430,9 @@ class Scanner:
 
                 check_group, check, filtered_batches = check_list[check_idx]
                 logger.info(f"Running check {check_idx + 1}/{total_checks}: {check[:50]}...")
+                
+                # Update running status with current check info
+                self._update_status(ScanStatus.RUNNING, check_idx + 1, total_checks, check)
 
                 try:
                     # Run check against filtered batches (uses fresh content per batch)
@@ -389,7 +447,7 @@ class Scanner:
                             logger.info(f"Added {new_count} new issue(s) to tracker")
 
                     # Update output file after every check for incremental progress
-                    self.output_generator.write(self.issue_tracker, self._scan_info)
+                    self._update_output_with_status()
 
                 except ContextOverflowError as e:
                     # Context overflow despite dynamic token tracking - this indicates
@@ -426,6 +484,7 @@ class Scanner:
                     if is_connection_error:
                         logger.warning(f"LLM connection error: {e}")
                         logger.info("Waiting for LLM connection to be restored...")
+                        self._update_status(ScanStatus.CONNECTION_LOST, error_message=str(e))
                         self.llm_client.wait_for_connection(self.config.llm_retry_interval)
                         logger.info("LLM connection restored, retrying check...")
                         # Retry by not incrementing - watermark ensures check will run again
@@ -434,6 +493,7 @@ class Scanner:
                         # Non-connection error (e.g., malformed response after retries)
                         # Log but continue to next check
                         logger.error(f"LLM error during check (skipping): {e}")
+                        self._update_status(ScanStatus.ERROR, error_message=str(e))
 
                 # Track worktree changes - update watermark only if content actually changed
                 if self._refresh_event.is_set():
@@ -490,7 +550,7 @@ class Scanner:
         logger.info(f"Scan complete: {new_count} new issues, {resolved_count} resolved")
 
         # Write output
-        self.output_generator.write(self.issue_tracker, self._scan_info)
+        self._update_output_with_status()
         logger.info(f"Output file updated with {self.issue_tracker.get_stats()['total']} total issues")
 
         # Track scanned files and their content hashes to avoid rescanning unchanged files

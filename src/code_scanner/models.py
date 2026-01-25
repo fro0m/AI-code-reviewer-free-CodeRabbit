@@ -6,12 +6,91 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from .text_utils import normalize_whitespace as _normalize_whitespace
+from .text_utils import similarity_ratio as _similarity_ratio
+
 
 class IssueStatus(Enum):
     """Status of a detected issue."""
 
     OPEN = "OPEN"
     RESOLVED = "RESOLVED"
+
+
+class FileStatus(Enum):
+    """Status of a file with uncommitted changes."""
+
+    STAGED = "staged"
+    UNSTAGED = "unstaged"
+    UNTRACKED = "untracked"
+    DELETED = "deleted"
+
+
+class ScanStatus(Enum):
+    """Status of the scan for a project."""
+
+    INITIALIZING = "initializing"
+    RUNNING = "running"
+    WAITING_OTHER_PROJECT = "waiting_other_project"
+    WAITING_NO_CHANGES = "waiting_no_changes"
+    WAITING_MERGE_REBASE = "waiting_merge_rebase"
+    NOT_RUNNING = "not_running"
+    ERROR = "error"
+    CONNECTION_LOST = "connection_lost"
+
+    def get_display_text(self, check_index: int = 0, total_checks: int = 0, 
+                         check_query: str = "", error_message: str = "") -> str:
+        """Get the display text for this status.
+
+        Args:
+            check_index: Current check index (1-based) for RUNNING status.
+            total_checks: Total number of checks for RUNNING status.
+            check_query: Current check query for RUNNING status.
+            error_message: Error message for ERROR or CONNECTION_LOST status.
+
+        Returns:
+            Formatted display text with icon and details.
+        """
+        icon = self.get_icon()
+        
+        if self == ScanStatus.RUNNING:
+            if check_query:
+                return f"{icon} Running - Check {check_index}/{total_checks}: {check_query}"
+            return f"{icon} Running - Check {check_index}/{total_checks}"
+        elif self == ScanStatus.WAITING_OTHER_PROJECT:
+            return f"{icon} Waiting - Another project is currently being scanned"
+        elif self == ScanStatus.WAITING_NO_CHANGES:
+            return f"{icon} Waiting - No uncommitted changes detected"
+        elif self == ScanStatus.WAITING_MERGE_REBASE:
+            return f"{icon} Waiting - Merge/rebase conflict resolution in progress"
+        elif self == ScanStatus.NOT_RUNNING:
+            return f"{icon} Not running"
+        elif self == ScanStatus.ERROR:
+            return f"{icon} Error - {error_message}"
+        elif self == ScanStatus.CONNECTION_LOST:
+            return f"{icon} Connection lost - Waiting for LLM server"
+        elif self == ScanStatus.INITIALIZING:
+            return f"{icon} Initializing"
+        else:
+            return f"{icon} {self.value}"
+
+    def get_icon(self) -> str:
+        """Get the icon for this status.
+
+        Returns:
+            Unicode icon character.
+        """
+        icons = {
+            ScanStatus.INITIALIZING: "🔧",
+            ScanStatus.RUNNING: "🔄",
+            ScanStatus.WAITING_OTHER_PROJECT: "⏳",
+            ScanStatus.WAITING_NO_CHANGES: "⏳",
+            ScanStatus.WAITING_MERGE_REBASE: "⏳",
+            ScanStatus.NOT_RUNNING: "⏹️",
+            ScanStatus.ERROR: "❌",
+            ScanStatus.CONNECTION_LOST: "🔌",
+        }
+        return icons.get(self, "")
 
 
 @dataclass
@@ -98,13 +177,26 @@ class ChangedFile:
     """Represents a file with uncommitted changes."""
 
     path: str
-    status: str  # 'staged', 'unstaged', 'untracked', 'deleted'
+    status: FileStatus | str  # 'staged', 'unstaged', 'untracked', 'deleted'
     mtime_ns: Optional[int] = None  # Nanosecond-precision mtime for change detection
+
+    def __post_init__(self):
+        """Convert string status to FileStatus enum for type safety."""
+        if isinstance(self.status, str):
+            # Map string values to enum values
+            status_map = {
+                "staged": FileStatus.STAGED,
+                "unstaged": FileStatus.UNSTAGED,
+                "untracked": FileStatus.UNTRACKED,
+                "deleted": FileStatus.DELETED,
+                "modified": FileStatus.UNSTAGED,  # Map 'modified' to 'unstaged' for backward compatibility
+            }
+            self.status = status_map.get(self.status, FileStatus.UNSTAGED)
 
     @property
     def is_deleted(self) -> bool:
         """Check if file is deleted."""
-        return self.status == "deleted"
+        return self.status == FileStatus.DELETED
 
 
 @dataclass
@@ -212,31 +304,6 @@ class CheckGroup:
         return False
 
 
-def _normalize_whitespace(text: str) -> str:
-    """Normalize whitespace in text for comparison.
-
-    Collapses multiple whitespace characters into single spaces
-    and strips leading/trailing whitespace.
-    """
-    return " ".join(text.split())
-
-
-def _similarity_ratio(s1: str, s2: str) -> float:
-    """Calculate similarity ratio between two strings using SequenceMatcher.
-    
-    This uses Python's built-in difflib for Levenshtein-like distance calculation.
-    
-    Args:
-        s1: First string.
-        s2: Second string.
-        
-    Returns:
-        Similarity ratio between 0.0 (completely different) and 1.0 (identical).
-    """
-    from difflib import SequenceMatcher
-    return SequenceMatcher(None, s1, s2).ratio()
-
-
 @dataclass
 class Project:
     """Represents a monitored project with all its components."""
@@ -256,6 +323,13 @@ class Project:
     is_active: bool = False
     last_scanned_files: set[str] = field(default_factory=set)
     last_file_contents_hash: dict[str, int] = field(default_factory=dict)
+    
+    # Scan status tracking
+    scan_status: ScanStatus = ScanStatus.INITIALIZING
+    current_check_index: int = 0  # 1-based index of current check
+    total_checks: int = 0  # Total number of checks in current scan
+    current_check_query: str = ""  # Current check query being executed
+    error_message: str = ""  # Error message for ERROR or CONNECTION_LOST status
 
     @property
     def output_path(self) -> Path:

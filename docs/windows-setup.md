@@ -169,7 +169,7 @@ Invoke-WebRequest http://localhost:11434/api/tags
 
 **Configuration for Ollama:**
 
-Copy a language-specific example (e.g., `examples/python-config.toml`) and update the `[llm]` section:
+Copy a language-specific example (e.g., `sample_configs/python-config.toml`) and update the `[llm]` section:
 
 ```toml
 [llm]
@@ -199,7 +199,7 @@ LM Studio provides a user-friendly Windows application.
 
 **Configuration for LM Studio:**
 
-Copy a language-specific example (e.g., `examples/python-config.toml`) and update the `[llm]` section:
+Copy a language-specific example (e.g., `sample_configs/python-config.toml`) and update the `[llm]` section:
 
 ```toml
 [llm]
@@ -235,7 +235,7 @@ uv run code-scanner
 cd /c/path/to/your/project
 
 # Create code_scanner_config.toml
-cp /c/path/to/code-scanner/examples/python-config.toml code_scanner_config.toml
+cp /c/path/to/code-scanner/sample_configs/python-config.toml code_scanner_config.toml
 
 # Run the scanner
 uv run code-scanner

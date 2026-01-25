@@ -108,21 +108,9 @@ class LLMClientManager:
         """
         if config.backend == "lm-studio":
             from code_scanner.lmstudio_client import LMStudioClient
-            return LMStudioClient(
-                host=config.host,
-                port=config.port,
-                model=config.model,
-                timeout=config.timeout,
-                context_limit=config.context_limit,
-            )
+            return LMStudioClient(config)
         elif config.backend == "ollama":
             from code_scanner.ollama_client import OllamaClient
-            return OllamaClient(
-                host=config.host,
-                port=config.port,
-                model=config.model,
-                timeout=config.timeout,
-                context_limit=config.context_limit,
-            )
+            return OllamaClient(config)
         else:
             raise ValueError(f"Unsupported backend: {config.backend}")

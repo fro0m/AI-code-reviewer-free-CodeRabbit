@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from openai import OpenAI, APIConnectionError, APIError
 
-from .base_client import BaseLLMClient, LLMClientError, ContextOverflowError
+from .base_client import BaseLLMClient, LLMClientError, ContextOverflowError, RequestBuilder
 from .models import LLMConfig
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,14 @@ class LMStudioClient(BaseLLMClient):
     def backend_name(self) -> str:
         """Get the human-readable backend name for logging."""
         return "LM Studio"
+
+    def is_connected(self) -> bool:
+        """Check if client is connected.
+
+        Returns:
+            True if connected, False otherwise.
+        """
+        return self._client is not None
 
     def connect(self) -> None:
         """Establish connection to LM Studio and get model info.
@@ -226,29 +234,17 @@ class LMStudioClient(BaseLLMClient):
                     f"--- USER PROMPT ---\n{user_prompt}\n--- END USER PROMPT ---"
                 )
 
-                # Build request parameters
-                request_params = {
-                    "model": self._model_id,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.1,  # Low temperature for consistent output
-                }
-
-                # Request high reasoning effort for better analysis
-                # This is supported by LM Studio and some other providers
-                request_params["reasoning_effort"] = "high"
-
-                # Add tools if provided (function calling)
-                if tools:
-                    request_params["tools"] = tools
-                    request_params["tool_choice"] = "auto"
-
-                # Only add response_format if supported and no tools
-                # (some models don't support both simultaneously)
-                if self._supports_json_format and not tools:
-                    request_params["response_format"] = {"type": "json_object"}
+                # Build request parameters using RequestBuilder
+                response_format = {"type": "json_object"} if self._supports_json_format and not tools else None
+                request_params = RequestBuilder.build_openai_request(
+                    model=self._model_id,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    tools=tools,
+                    context_limit=self._context_limit,
+                    reasoning_effort="high",
+                    response_format=response_format,
+                )
 
                 response = self._client.chat.completions.create(**request_params)
 

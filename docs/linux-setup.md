@@ -169,7 +169,7 @@ curl http://localhost:11434/api/tags
 
 **Configuration for Ollama:**
 
-Copy a language-specific example (e.g., `examples/python-config.toml`) and update the `[llm]` section:
+Copy a language-specific example (e.g., `sample_configs/python-config.toml`) and update the `[llm]` section:
 
 ```toml
 [llm]
@@ -207,7 +207,7 @@ chmod +x LM-Studio-*.AppImage
 
 **Configuration for LM Studio:**
 
-Copy a language-specific example (e.g., `examples/python-config.toml`) and update the `[llm]` section:
+Copy a language-specific example (e.g., `sample_configs/python-config.toml`) and update the `[llm]` section:
 
 ```toml
 [llm]
@@ -224,8 +224,8 @@ context_limit = 16384  # Required
 # Navigate to your project
 cd /path/to/your/project
 
-# Create code_scanner_config.toml (see examples/)
-cp /path/to/code-scanner/examples/python-config.toml code_scanner_config.toml
+# Create code_scanner_config.toml (see sample_configs/)
+cp /path/to/code-scanner/sample_configs/python-config.toml code_scanner_config.toml
 
 # Run the scanner (runs continuously until Ctrl+C)
 uv run code-scanner

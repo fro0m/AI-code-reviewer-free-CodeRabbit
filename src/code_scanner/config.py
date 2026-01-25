@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from .utils import get_config_dir
+from .error_messages import ConfigErrors 
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -105,9 +106,13 @@ def load_config(
     # Resolve target directory
     target_directory = target_directory.resolve()
     if not target_directory.exists():
-        raise ConfigError(f"Target directory does not exist: {target_directory}")
+        raise ConfigError(
+            ConfigErrors.TARGET_DIR_NOT_EXIST.format(target_directory=target_directory)
+        )
     if not target_directory.is_dir():
-        raise ConfigError(f"Target path is not a directory: {target_directory}")
+        raise ConfigError(
+            ConfigErrors.TARGET_PATH_NOT_DIR.format(target_directory=target_directory)
+        )
 
     # Find config file
     if config_file is None:
@@ -129,7 +134,7 @@ def load_config(
         with open(config_file, "rb") as f:
             data = tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
-        raise ConfigError(f"Invalid TOML in config file: {e}")
+        raise ConfigError(ConfigErrors.INVALID_TOML.format(e=e))
 
     # Validate no unsupported top-level sections
     SUPPORTED_SECTIONS = {"llm", "checks"}
@@ -161,7 +166,7 @@ def load_config(
             logger.info("Using legacy config format (list of strings). Consider migrating to [[checks]] format.")
             for i, check in enumerate(checks_data):
                 if not isinstance(check, str) or not check.strip():
-                    raise ConfigError(f"Check at index {i} must be a non-empty string")
+                    raise ConfigError(ConfigErrors.CHECK_MUST_BE_STRING.format(i=i))
             check_groups.append(CheckGroup(
                 pattern="*",
                 checks=[c.strip() for c in checks_data]
@@ -171,7 +176,7 @@ def load_config(
             SUPPORTED_CHECK_PARAMS = {"pattern", "checks"}
             for i, group_data in enumerate(checks_data):
                 if not isinstance(group_data, dict):
-                    raise ConfigError(f"Check group at index {i} must be a table")
+                    raise ConfigError(ConfigErrors.CHECK_GROUP_MUST_BE_TABLE.format(i=i))
 
                 # Validate no unsupported check parameters
                 unsupported_check_params = set(group_data.keys()) - SUPPORTED_CHECK_PARAMS
@@ -186,24 +191,30 @@ def load_config(
                 checks = group_data.get("checks", [])
 
                 if not isinstance(pattern, str) or not pattern.strip():
-                    raise ConfigError(f"Check group at index {i}: 'pattern' must be a non-empty string")
+                    raise ConfigError(
+                        ConfigErrors.CHECK_GROUP_PATTERN_REQUIRED.format(i=i)
+                    )
 
                 if not isinstance(checks, list):
-                    raise ConfigError(f"Check group at index {i}: 'checks' must be a list")
+                    raise ConfigError(
+                        ConfigErrors.CHECK_GROUP_CHECKS_MUST_BE_LIST.format(i=i)
+                    )
 
                 # Empty checks list means "ignore files matching this pattern"
                 for j, check in enumerate(checks):
                     if not isinstance(check, str) or not check.strip():
-                        raise ConfigError(f"Check group {i}, check {j}: must be a non-empty string")
+                        raise ConfigError(
+                            ConfigErrors.CHECK_GROUP_CHECK_MUST_BE_STRING.format(i=i, j=j)
+                        )
 
                 check_groups.append(CheckGroup(
                     pattern=pattern.strip(),
                     checks=[r.strip() for r in checks]
                 ))
         else:
-            raise ConfigError("'checks' must be a list of strings or array of tables")
+            raise ConfigError(ConfigErrors.CHECKS_MUST_BE_LIST_OR_TABLES)
     else:
-        raise ConfigError("'checks' must be a non-empty list")
+        raise ConfigError(ConfigErrors.CHECKS_MUST_BE_NON_EMPTY)
 
     # Extract LLM config
     llm_data = data.get("llm", {})
@@ -220,64 +231,18 @@ def load_config(
     
     # Validate required backend field
     if "backend" not in llm_data:
-        raise ConfigError(
-            "\n" + "=" * 70 + "\n"
-            "Configuration Error: 'backend' must be specified in [llm] section.\n"
-            "=" * 70 + "\n\n"
-            "Supported backends:\n"
-            "  - \"lm-studio\": LM Studio with OpenAI-compatible API\n"
-            "  - \"ollama\": Ollama with native /api/chat endpoint\n\n"
-            "Example configuration:\n\n"
-            "  [llm]\n"
-            "  backend = \"lm-studio\"\n"
-            "  host = \"localhost\"\n"
-            "  port = 1234\n"
-            "  context_limit = 32768\n\n"
-            "Or for Ollama:\n\n"
-            "  [llm]\n"
-            "  backend = \"ollama\"\n"
-            "  host = \"localhost\"\n"
-            "  port = 11434\n"
-            "  model = \"qwen3:4b\"  # Required for Ollama\n"
-            "  context_limit = 16384  # Minimum 16384 recommended\n\n"
-            "=" * 70
-        )
+        raise ConfigError(ConfigErrors.BACKEND_REQUIRED)
     
     # Validate required host and port fields
     if "host" not in llm_data:
-        raise ConfigError(
-            "Configuration Error: 'host' must be specified in [llm] section.\n"
-            "Example: host = \"localhost\""
-        )
+        raise ConfigError(ConfigErrors.HOST_REQUIRED)
     
     if "port" not in llm_data:
-        raise ConfigError(
-            "Configuration Error: 'port' must be specified in [llm] section.\n"
-            "Example: port = 1234 (for LM Studio) or port = 11434 (for Ollama)"
-        )
+        raise ConfigError(ConfigErrors.PORT_REQUIRED)
     
     # Validate required context_limit field
     if "context_limit" not in llm_data:
-        raise ConfigError(
-            "\n" + "=" * 70 + "\n"
-            "Configuration Error: 'context_limit' must be specified in [llm] section.\n"
-            "=" * 70 + "\n\n"
-            "The context_limit parameter is required and defines how much text\n"
-            "the LLM can process at once. Common values:\n\n"
-            "  - 4096   (small models)\n"
-            "  - 8192   (medium models)\n"
-            "  - 16384  (recommended minimum)\n"
-            "  - 32768  (large context)\n"
-            "  - 131072 (very large context)\n\n"
-            "Add context_limit to your config.toml:\n\n"
-            "  [llm]\n"
-            "  backend = \"lm-studio\"\n"
-            "  host = \"localhost\"\n"
-            "  port = 1234\n"
-            "  context_limit = 16384  # <-- Add this line\n\n"
-            "Tip: Check your model's context window in LM Studio/Ollama settings.\n"
-            "=" * 70
-        )
+        raise ConfigError(ConfigErrors.CONTEXT_LIMIT_REQUIRED)
     
     try:
         llm_config = LLMConfig(
@@ -289,7 +254,7 @@ def load_config(
             context_limit=llm_data["context_limit"],  # Now required
         )
     except ValueError as e:
-        raise ConfigError(f"LLM Configuration Error: {e}")
+        raise ConfigError(ConfigErrors.LLM_CONFIG_ERROR.format(e=e))
 
     # Build config
     config = Config(

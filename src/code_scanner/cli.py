@@ -26,7 +26,7 @@ from .scanner import Scanner
 from .utils import setup_logging
 from .project_manager import ProjectManager
 from .llm_client_manager import LLMClientManager
-from .models import Project
+from .models import Project, ScanStatus
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class Application:
 
         # Set up logging with project prefix support
         setup_logging(
-            log_path=log_path,
+            log_file=log_path,
             debug=self._debug,
             project_manager=self.project_manager
         )
@@ -141,6 +141,27 @@ class Application:
         if active_project:
             self.project_manager.switch_to_project(active_project)
             self._initialize_scanner(active_project)
+            # Set all inactive projects to WAITING_OTHER_PROJECT
+            all_projects = self.project_manager.get_all_projects()
+            for project in all_projects:
+                if project.project_id != active_project.project_id:
+                    project.scan_status = ScanStatus.WAITING_OTHER_PROJECT
+                    logger.info(f"Setting inactive project {project.project_id} to WAITING_OTHER_PROJECT")
+                    if project.output_generator is not None:
+                        project.output_generator.write(
+                            project.issue_tracker,
+                            {},
+                            project.scan_status,
+                            project.current_check_index,
+                            project.total_checks,
+                            project.current_check_query,
+                            project.error_message,
+                        )
+                    else:
+                        logger.warning(f"Output generator is None for inactive project {project.project_id}")
+        else:
+            # No active project found, set all projects to WAITING_NO_CHANGES
+            self.project_manager.set_all_projects_status(ScanStatus.WAITING_NO_CHANGES)
 
         # Log summary
         all_projects = self.project_manager.get_all_projects()
@@ -210,7 +231,15 @@ class Application:
         project.output_generator = OutputGenerator(project.output_path)
 
         # Create initial output file so user knows it's working
-        project.output_generator.write(project.issue_tracker, {"status": "Scanning in progress..."})
+        project.output_generator.write(
+            project.issue_tracker,
+            {"status": "Scanning in progress..."},
+            project.scan_status,
+            project.current_check_index,
+            project.total_checks,
+            project.current_check_query,
+            project.error_message,
+        )
 
         # Create ctags index (will be generated when project becomes active)
         project.ctags_index = CtagsIndex(config.target_directory)
@@ -250,6 +279,7 @@ class Application:
             output_generator=project.output_generator,
             ctags_index=project.ctags_index,
             file_filter=project.file_filter,
+            project=project,
         )
 
     def _switch_project(self, new_project: Project) -> None:
@@ -422,6 +452,9 @@ class Application:
         except Exception:
             pass  # Logging may not be set up yet
 
+        # Set all projects to NOT_RUNNING status
+        self.project_manager.set_all_projects_status(ScanStatus.NOT_RUNNING)
+
         self._stop_event.set()
 
         if self.scanner:
@@ -482,7 +515,7 @@ def parse_args() -> argparse.Namespace:
         help="Enable debug logging to console and log file (default: INFO level)",
     )
 
-    return parser.parse_args()
+    return parser.parse_intermixed_args()
 
 
 def parse_project_configs(args: argparse.Namespace) -> list[tuple[Path, Path, Optional[str]]]:

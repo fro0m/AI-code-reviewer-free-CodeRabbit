@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from .issue_tracker import IssueTracker
-from .models import Issue, IssueStatus
+from .models import Issue, IssueStatus, ScanStatus
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,9 @@ class OutputGenerator:
         """
         self.output_path = output_path
 
-    def write(self, tracker: IssueTracker, scan_info: Optional[dict] = None) -> None:
+    def write(self, tracker: IssueTracker, scan_info: Optional[dict] = None,
+              scan_status: Optional[ScanStatus] = None, check_index: int = 0,
+              total_checks: int = 0, check_query: str = "", error_message: str = "") -> None:
         """Write the full output file.
 
         Rewrites the entire file with current issue state.
@@ -30,8 +32,14 @@ class OutputGenerator:
         Args:
             tracker: Issue tracker with current issues.
             scan_info: Optional scan metadata (files scanned, etc.)
+            scan_status: Optional scan status.
+            check_index: Current check index (1-based) for RUNNING status.
+            total_checks: Total number of checks for RUNNING status.
+            check_query: Current check query for RUNNING status.
+            error_message: Error message for ERROR or CONNECTION_LOST status.
         """
-        content = self._generate_content(tracker, scan_info)
+        content = self._generate_content(tracker, scan_info, scan_status, 
+                                       check_index, total_checks, check_query, error_message)
 
         try:
             with open(self.output_path, "w", encoding="utf-8") as f:
@@ -45,12 +53,22 @@ class OutputGenerator:
         self,
         tracker: IssueTracker,
         scan_info: Optional[dict] = None,
+        scan_status: Optional[ScanStatus] = None,
+        check_index: int = 0,
+        total_checks: int = 0,
+        check_query: str = "",
+        error_message: str = "",
     ) -> str:
         """Generate the Markdown content.
 
         Args:
             tracker: Issue tracker with current issues.
             scan_info: Optional scan metadata.
+            scan_status: Optional scan status.
+            check_index: Current check index (1-based) for RUNNING status.
+            total_checks: Total number of checks for RUNNING status.
+            check_query: Current check query for RUNNING status.
+            error_message: Error message for ERROR or CONNECTION_LOST status.
 
         Returns:
             Complete Markdown content.
@@ -67,6 +85,13 @@ class OutputGenerator:
         stats = tracker.get_stats()
         lines.append("## Summary")
         lines.append("")
+        
+        # Status section
+        if scan_status:
+            status_text = scan_status.get_display_text(check_index, total_checks, check_query, error_message)
+            lines.append(f"- **Status:** {status_text}")
+            lines.append("")
+        
         lines.append(f"- **Open Issues:** {stats['open']}")
         lines.append(f"- **Resolved Issues:** {stats['resolved']}")
         lines.append(f"- **Total Issues:** {stats['total']}")

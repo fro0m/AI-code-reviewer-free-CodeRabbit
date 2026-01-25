@@ -7,7 +7,7 @@ from typing import Optional
 from git import Repo, InvalidGitRepositoryError, GitCommandError
 
 from .file_filter import FileFilter
-from .models import ChangedFile, GitState
+from .models import ChangedFile, FileStatus, GitState
 
 logger = logging.getLogger(__name__)
 
@@ -218,25 +218,28 @@ class GitWatcher:
                 work_tree_status = xy[1]
 
                 if index_status == "D" or work_tree_status == "D":
-                    status = "deleted"
+                    status = FileStatus.DELETED
                 elif xy == "??" or (index_status == "?" and work_tree_status == "?"):
-                    status = "untracked"
+                    status = FileStatus.UNTRACKED
                 elif index_status != "." and index_status != "?":
-                    status = "staged"
+                    status = FileStatus.STAGED
                 else:
-                    status = "unstaged"
+                    status = FileStatus.UNSTAGED
 
-                # Skip ignored files
-                if not self._is_ignored(path):
+                # Skip ignored files and excluded files
+                if not self._is_ignored(path) and path not in self.excluded_files:
                     # Store modification time with nanosecond precision for change detection
                     mtime_ns = None
                     if status != "deleted":
                         try:
                             mtime_ns = (self.repo_path / path).stat().st_mtime_ns
-                        except OSError:
-                            pass
+                            logger.debug(f"File {path}: mtime_ns={mtime_ns}")
+                        except OSError as e:
+                            logger.debug(f"Could not stat file {path}: {e}")
                     changed_files.append(ChangedFile(path=path, status=status, mtime_ns=mtime_ns))
                     seen_paths.add(path)
+                elif path in self.excluded_files:
+                    logger.debug(f"Skipping excluded file: {path}")
 
             # If comparing against a specific commit, also get files changed since that commit
             if self.commit_hash:
@@ -260,11 +263,11 @@ class GitWatcher:
                             continue
 
                         if status_char == "D":
-                            status = "deleted"
+                            status = FileStatus.DELETED
                         else:
-                            status = "staged"
+                            status = FileStatus.STAGED
 
-                        if not self._is_ignored(path):
+                        if not self._is_ignored(path) and path not in self.excluded_files:
                             # Store modification time with nanosecond precision
                             mtime_ns = None
                             if status != "deleted":
@@ -274,6 +277,8 @@ class GitWatcher:
                                     pass
                             changed_files.append(ChangedFile(path=path, status=status, mtime_ns=mtime_ns))
                             seen_paths.add(path)
+                        elif path in self.excluded_files:
+                            logger.debug(f"Skipping excluded file in commit diff: {path}")
                 except GitCommandError as e:
                     logger.warning(f"Git diff error: {e}")
 

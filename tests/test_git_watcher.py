@@ -8,6 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from code_scanner.git_watcher import GitWatcher, GitError
+from code_scanner.models import FileStatus
 
 
 class TestGitWatcher:
@@ -53,7 +54,7 @@ class TestGitWatcher:
         assert state.has_changes
         assert len(state.changed_files) == 1
         assert state.changed_files[0].path == "README.md"
-        assert state.changed_files[0].status == "unstaged"
+        assert state.changed_files[0].status == FileStatus.UNSTAGED
 
     def test_get_state_with_staged_changes(self, git_repo: Path):
         """Test getting state with staged changes."""
@@ -84,7 +85,7 @@ class TestGitWatcher:
         state = watcher.get_state()
         
         assert state.has_changes
-        assert any(f.path == "untracked.txt" and f.status == "untracked" 
+        assert any(f.path == "untracked.txt" and f.status == FileStatus.UNTRACKED
                    for f in state.changed_files)
 
     def test_get_state_with_deleted_file(self, git_repo: Path):

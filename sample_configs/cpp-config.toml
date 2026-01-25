@@ -70,7 +70,25 @@ checks = [
     "Check that std::string or string_view is used instead of manual string handling.",
     "Check that std::function is used instead of function pointers where clearer.",
     "Check that move operations are marked noexcept.",
-    "Check for opportunities to optimize algorithms and data structures.",
+    # Algorithm and data structure optimization checks
+    "Check for O(n²) nested loops that could be optimized using hash maps (std::unordered_map) or sets (std::unordered_set).",
+    "Check for linear searches in sorted containers that could use binary search (std::lower_bound, std::binary_search).",
+    "Check for repeated string concatenation that could use std::string::reserve() or std::ostringstream.",
+    "Check for unnecessary copying of large objects that could use const references or std::move.",
+    "Check for std::vector that frequently resizes and could use reserve() with known capacity.",
+    "Check for algorithms that could benefit from memoization or caching results.",
+    "Check for data structures chosen without considering time/space trade-offs (e.g., std::list vs std::vector).",
+    "Check for opportunities to use more efficient STL algorithms (e.g., std::sort, std::find_if, std::transform, std::accumulate).",
+    "Check for containers where a different container type would be more efficient (vector vs deque vs list vs map).",
+    "Check for sorting operations that could use more efficient comparison functions or key extraction.",
+    "Check for std::map usage where std::unordered_map would be more efficient for non-ordered keys.",
+    "Check for std::set usage where std::unordered_set would be more efficient for non-ordered keys.",
+    "Check for repeated calls to .size() or .length() in loops that could be cached.",
+    "Check for pass-by-value of large objects that should be passed by const reference.",
+    "Check for algorithms with exponential complexity that could use dynamic programming.",
+    "Check for priority queue use cases that could use std::priority_queue instead of manual sorting.",
+    "Check for graph algorithms that could use more efficient data structures like adjacency lists.",
+    "Check for cache-friendly data access patterns that could improve performance.",
 ]
 
 [[checks]]

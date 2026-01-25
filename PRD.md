@@ -5,9 +5,9 @@
 The primary objective of this project is to implement a software program that **scans a target source code directory** using a separate application to identify potential issues or answer specific user-defined questions.
 
 *   **Core Value Proposition:** Provide developers with an automated, **language-agnostic** background scanner that identifies "undefined behavior," code style inconsistencies, optimization opportunities, and architectural violations (e.g., broken MVC patterns).
-*   **Quality Assurance:** The codebase maintains **92% test coverage** with 905 unit tests ensuring reliability and maintainability.
+*   **Quality Assurance:** The codebase maintains **91% test coverage** with 956 unit tests ensuring reliability and maintainability.
 *   **Target Scope:** The application focuses on **uncommitted changes** in a Git branch by default, ensuring immediate feedback for developer before code is finalized.
-*   **Directory Scope:** The scanner targets **strictly one directory**, but scans it **recursively** (all subdirectories).
+*   **Directory Scope:** The scanner can monitor **multiple directories (projects) simultaneously** with automatic project switching based on most recent changes. Each directory is scanned **recursively** (all subdirectories).
 *   **Git Requirement:** The target directory **must be a Git repository**. The scanner will fail with an error if Git is not initialized.
 *   **Binary File Handling:** Binary files (images, compiled objects, etc.) are **silently skipped** during scanning. The change detection system correctly tracks these files to prevent infinite rescan loops.
 *   **Privacy and Efficiency:** By utilizing a **local AI model**, the application ensures that source code does not leave the local environment while providing the intelligence of a Large Language Model (LLM).
@@ -18,6 +18,11 @@ The primary objective of this project is to implement a software program that **
         *   macOS: `~/Library/Application Support/code-scanner`
         *   Linux/Unix: `~/.code-scanner`
     *   **Log and Lock Files:** The log file (`code_scanner.log`) and lock file (`code_scanner.lock`) are stored in the platform-specific configuration directory.
+*   **Prerequisites:** The following tools must be installed:
+    *   **Python 3.10 or higher** - Required runtime
+    *   **Git** - For tracking file changes
+    *   **Universal Ctags** - For symbol indexing and navigation
+    *   **ripgrep** - For fast code search (used by AI tools)
 *   **Uninteractive Daemon Mode:** The scanner is designed for **fully uninteractive daemon operation**. No interactive prompts are used—all configuration must be provided via a config file. This enables running as a system service or background process.
 *   **Continuous Scanning by Default:** The scanner runs in continuous monitoring mode automatically—there is no separate "watch mode" flag. Once started, it monitors for changes and scans indefinitely until manually stopped (`Ctrl+C`).
 *   **Passive Operation:** The scanner operates as a **passive background tool** that only reports issues to a log file. It does **not** modify any source files in the target directory.
@@ -61,7 +66,7 @@ The primary objective of this project is to implement a software program that **
 ### 2.2 Query and Analysis Engine
 
 *   **Configuration Input:** The scanner will take a **TOML configuration file** containing user-defined prompts organized into check groups. The configuration file is **read once at startup** (no hot-reload support).
-*   **Config File Location:** The TOML config file is specified via **CLI argument**, or defaults to the **scanner's script directory** if not provided.
+*   **Config File Location:** The TOML config file is specified via **CLI argument**, or defaults to `code_scanner_config.toml` in the **target directory** if not provided.
 *   **Missing Config File:** If no config file is found (not provided and not in script directory), **fail with error**.
 *   **Empty Checks List:** If a config file exists but contains no checks, **fail with error**.
 *   **Strict Configuration Validation:** The scanner validates configuration files strictly:
@@ -219,6 +224,51 @@ The primary objective of this project is to implement a software program that **
 *   **If the Git watcher detects new changes during scanning**, the scanner uses the **watermark algorithm**: complete the current cycle, then rescan only the checks that ran before the change point (checks 0..N where N is the index where the change was detected). This repeats until no changes occur during a cycle.
 *   **On SIGINT**, immediately exit and remove lock file.
 
+### 2.4 Multi-Project Support
+
+The scanner supports monitoring **multiple projects simultaneously** and automatically switches between them based on recent changes.
+
+*   **CLI Format:** Supports multiple project-config pairs specified at startup:
+    *   Single project (backward compatible): `code-scanner /path/to/project -c /path/to/config.toml`
+    *   Multiple projects: `code-scanner /path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2`
+    *   With default configs: `code-scanner /path/to/project1 /path/to/project2`
+    *   With commit hashes: `code-scanner /path/to/project1 --commit abc123 -c /path/to/config1 /path/to/project2 --commit def456`
+*   **Active Project Selection:** The project with **most recent changes** becomes active for checks
+    *   Uses existing git change detection algorithm (max mtime_ns among changed files)
+    *   Project switching is **non-blocking** - waits for current check to complete
+*   **State Preservation:** Each project maintains its own state:
+    *   Issue tracker state is preserved in memory for each project
+    *   Switching between projects is seamless - previous project state is retained
+    *   State is **not persisted** across restarts (starts fresh each time)
+*   **LLM Client Management:**
+    *   **Smart Switching:** LLM client is **only disconnected and reconnected** when configs differ
+    *   **Client Reuse:** If configs are same, existing client is reused (avoids unnecessary reconnections)
+    *   **Config Comparison:** Compares backend, host, port, model, and context_limit
+*   **Output Files:** Each project has its own output file:
+    *   `code_scanner_results.md` in each project directory
+    *   Separate results per project for clear separation
+*   **Logging:** Single global log file with project prefixes:
+    *   Log file location (platform-specific):
+        *   Windows: `%APPDATA%\code-scanner\code_scanner.log`
+        *   macOS: `~/Library/Application Support/code-scanner/code_scanner.log`
+        *   Linux/Unix: `~/.code-scanner/code_scanner.log`
+    *   Project prefixes: `[project_0]`, `[project_1]`, etc.
+    *   System messages use `[SYSTEM]` prefix
+    *   INFO-level logging for project switching (not DEBUG)
+*   **Ctags Indexing:** Only active project's ctags index is generated:
+    *   Index is regenerated when switching projects
+    *   Inactive projects do not maintain ctags index (saves memory)
+*   **Single Instance:** One scanner instance monitors all projects:
+    *   Single global lock file (platform-specific):
+        *   Windows: `%APPDATA%\code-scanner\code_scanner.lock`
+        *   macOS: `~/Library/Application Support/code-scanner/code_scanner.lock`
+        *   Linux/Unix: `~/.code-scanner/code_scanner.lock`
+    *   Prevents multiple scanner instances running simultaneously
+*   **Use Case:** User works on one project, then switches to another project without restarting code scanner:
+    *   All projects are specified at startup
+    *   User doesn't need to restart with different project/config
+    *   Seamless switching preserves work context
+
 ### 2.5 Service Installation
 
 The scanner can be installed as a system service to start automatically on boot. Autostart scripts are provided in the `scripts/` directory:
@@ -232,7 +282,9 @@ All scripts include:
 *   **60-second startup delay** to allow LLM servers to initialize.
 *   **Test launch** before registering the service.
 *   **Legacy service detection** and removal.
-*   **Interactive prompts** for project paths and config files.
+*   **Full CLI command support:** Scripts accept a full CLI command string as a single argument for multi-project support:
+    *   Example: `./scripts/autostart-linux.sh install "/path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2"`
+    *   Script automatically detects code-scanner executable
 
 ### 2.6 Sample Configuration Checks
 
@@ -294,8 +346,81 @@ checks = [
 
 ***
 
-**Analogy for Understanding:**
+## 3. AI Tools for Context Expansion
+
+The scanner provides AI tools that allow the LLM to interactively request additional codebase information for sophisticated architectural checks and deeper analysis.
+
+### 3.1 Tool Overview
+
+The LLM can invoke the following tools during analysis:
+
+*   **search_text** - Fast text search using ripgrep
+    *   Search for patterns across the codebase
+    *   Supports regex, case sensitivity, whole word matching
+    *   File pattern filtering (e.g., `*.py`, `*.cpp`)
+    *   Returns matches with file paths, line numbers, and code snippets
+    *   Automatically detects definition lines
+*   **read_file** - Read file contents
+    *   Read entire file or specific line ranges
+    *   Supports line ranges for targeted reading
+    *   Returns file content as plain text
+*   **list_directory** - List directory contents
+    *   List files and directories in a path
+    *   Supports recursive directory listing
+    *   Returns file names and types
+*   **get_file_diff** - Get git diff for a file
+    *   Show changes between commits or working tree
+    *   Configurable context lines (default: 3)
+    *   Returns unified diff format
+*   **get_file_summary** - Get file statistics
+    *   Returns file size, line count, language detection
+    *   Useful for understanding file context before reading
+*   **symbol_exists** - Check if symbol exists (Ctags)
+    *   Query symbol index for existence
+    *   Filter by symbol type (function, class, variable, etc.)
+    *   Returns boolean and matching symbols
+*   **find_definition** - Find symbol definition (Ctags)
+    *   Locate where a symbol is defined
+    *   Returns file path, line number, and symbol details
+    *   Supports kind filtering
+*   **find_symbols** - Find symbols by pattern (Ctags)
+    *   Search for symbols matching a pattern
+    *   Filter by symbol kind
+    *   Returns all matching symbols with locations
+*   **get_enclosing_scope** - Get parent scope (Ctags)
+    *   Find the class/function containing a line
+    *   Returns scope name and type
+    *   Useful for understanding code context
+*   **find_usages** - Find all usages of a symbol (Ctags)
+    *   Locate all references to a symbol
+    *   Filter by file or include definitions
+    *   Returns list of usage locations
+
+### 3.2 Ctags Integration
+
+The scanner uses **Universal Ctags** for efficient symbol indexing and navigation.
+
+*   **Symbol Indexing:** Generates an in-memory index of all symbols (functions, classes, variables, etc.) in the codebase
+*   **Fast Lookups:** Provides O(1) symbol lookups instead of O(n) file scanning
+*   **Language Support:** Supports 50+ programming languages via Universal Ctags
+*   **Async Generation:** Index is generated asynchronously in background to avoid blocking startup
+*   **Index Persistence:** Index is regenerated when switching projects to save memory
+*   **Tool Integration:** AI tools query the index for symbol lookups, definitions, and usages
+
+### 3.3 Ripgrep Integration
+
+The scanner uses **ripgrep** for fast code search operations.
+
+*   **Performance:** Ripgrep is significantly faster than grep for large codebases
+*   **Gitignore Respect:** Automatically respects `.gitignore` patterns
+*   **Regex Support:** Full regex pattern matching for advanced searches
+*   **JSON Output:** Structured output for easy parsing
+*   **File Filtering:** Built-in file type filtering (e.g., `*.py`, `*.cpp`)
+
+## 4. Analogy for Understanding
 
 Think of this code scanner as a **diligent proofreader** sitting over a writer's shoulder. Instead of waiting for the writer to finish the whole book, the proofreader only looks at the sentences the writer just typed (the uncommitted changes). The proofreader uses a specialized guidebook (the config file) to check for specific mistakes.
 
 **With AI Tooling**, the proofreader now has a **library card**. Instead of just looking at the new sentences, the proofreader can get up, go to the bookshelf (the codebase), and pull out an old chapter (another file) to make sure a character's name is still spelled correctly or that a plot point remains consistent. The proofreader can even browse the table of contents (directory listings) to understand the book's structure before making recommendations.
+
+**With Multi-Project Support**, the proofreader can monitor multiple books simultaneously, automatically switching between them based on which one the writer is currently editing. Each book maintains its own set of notes and corrections, and switching between them is seamless without losing context.

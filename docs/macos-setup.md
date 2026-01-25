@@ -125,7 +125,7 @@ curl http://localhost:11434/api/tags
 
 **Configuration for Ollama:**
 
-Copy a language-specific example (e.g., `examples/python-config.toml`) and update the `[llm]` section:
+Copy a language-specific example (e.g., `sample_configs/python-config.toml`) and update the `[llm]` section:
 
 ```toml
 [llm]
@@ -156,7 +156,7 @@ LM Studio provides a native macOS app with a great GUI.
 
 **Configuration for LM Studio:**
 
-Copy a language-specific example (e.g., `examples/python-config.toml`) and update the `[llm]` section:
+Copy a language-specific example (e.g., `sample_configs/python-config.toml`) and update the `[llm]` section:
 
 ```toml
 [llm]
@@ -174,7 +174,7 @@ context_limit = 16384  # Required
 cd /path/to/your/project
 
 # Create code_scanner_config.toml
-cp /path/to/code-scanner/examples/python-config.toml code_scanner_config.toml
+cp /path/to/code-scanner/sample_configs/python-config.toml code_scanner_config.toml
 
 # Run the scanner (runs continuously until Ctrl+C)
 uv run code-scanner

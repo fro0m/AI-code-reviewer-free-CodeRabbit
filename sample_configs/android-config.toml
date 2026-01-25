@@ -68,14 +68,42 @@ checks = [
     "Check that large images are properly downscaled.",
     "Check that animations do not block user interaction.",
     "Check for missing empty, error, or loading states for data screens.",
-    "Check for opportunities to optimize algorithms and data structures.",
-]
+    # Algorithm and data structure optimization checks
+    "Check for O(n²) nested loops that could be optimized using HashMap or SparseArray for O(1) lookups.",
+    "Check for linear searches in lists that could use binary search with Collections.binarySearch() on sorted lists.",
+    "Check for repeated string concatenation that could use StringBuilder.",
+    "Check for unnecessary copying of large objects that could use references or Parcelable efficiently.",
+    "Check for ArrayList that frequently resizes and could use new ArrayList<>(capacity) with known size.",
+    "Check for algorithms that could benefit from memoization using caching libraries like LruCache.",
+    "Check for data structures chosen without considering time/space trade-offs (ArrayList vs LinkedList vs HashMap vs SparseArray).",
+    "Check for opportunities to use more efficient Java Stream API operations (map, filter, reduce, collect).",
+    "Check for containers where a different collection type would be more efficient (List vs Set vs Map vs SparseArray).",
+    "Check for sorting operations that could use more efficient Comparator implementations or key extraction.",
+    "Check for TreeMap usage where HashMap would be more efficient for non-ordered keys.",
+    "Check for TreeSet usage where HashSet would be more efficient for non-ordered keys.",
+    "Check for repeated .size() or .length() calls in loops that could be cached.",
+    "Check for pass-by-value of large objects that should be passed by reference.",
+    "Check for algorithms with exponential complexity that could use dynamic programming.",
+    "Check for priority queue use cases that could use PriorityQueue instead of manual sorting.",
+    "Check for graph algorithms that could use more efficient data structures like adjacency lists with HashMap.",
+    "Check for cache-friendly data access patterns that could improve performance.",
+    "Check for LinkedList usage where ArrayList would be more efficient for random access.",
+    "Check for Vector usage where ArrayList would be more appropriate (Vector is synchronized).",
+    "Check for Hashtable usage where HashMap would be more appropriate (Hashtable is synchronized).",
+    "Check for repeated Map.get() calls that could be cached in local variables.",
+    "Check for String operations that could use StringBuilder or String methods more efficiently.",
+    "Check for array operations that could use System.arraycopy() or Arrays utility methods.",
+    "Check for primitive wrapper usage (Integer, Long) where primitives (int, long) would be more efficient.",
+    "Check for SparseArray usage where HashMap<Integer, Object> would be less efficient for integer keys.",
+    "Check for ArrayMap usage where HashMap would be more efficient for larger datasets.",
+    "Check for RecyclerView adapter operations that could use DiffUtil for efficient updates.",
+] 
 
 [[checks]]
 pattern = "*.xml"
 checks = [
     "Check for deeply nested view hierarchies that should use ConstraintLayout.",
-    "Check for overdraw from overlapping opaque backgrounds.",
+    "Check for overdraw from overlapping opaque backgrounds.",,
 ]
 
 [[checks]]

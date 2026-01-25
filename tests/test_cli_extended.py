@@ -34,72 +34,63 @@ def temp_git_repo():
 
 
 @pytest.fixture
-def mock_config(temp_git_repo):
-    """Create a mock Config object."""
-    config = MagicMock(spec=Config)
-    config.target_directory = temp_git_repo
-    config.output_path = temp_git_repo / "results.md"
-    config.log_path = temp_git_repo / "scanner.log"
-    config.lock_path = temp_git_repo / ".code_scanner.lock"
-    config.config_file = temp_git_repo / "config.toml"
-    config.output_file = "results.md"
-    config.log_file = "scanner.log"
-    config.git_poll_interval = 1.0
-    config.llm_retry_interval = 1.0
-    config.max_llm_retries = 3
-    config.check_groups = [CheckGroup(pattern="*", checks=["Check"])]
-    config.llm = LLMConfig(backend="lm-studio", host="localhost", port=1234, context_limit=16384)
-    return config
+def mock_projects(temp_git_repo):
+    """Create a mock projects list for multi-project Application."""
+    config_file = temp_git_repo / "config.toml"
+    return [(temp_git_repo, config_file, None)]
 
 
 class TestApplicationInit:
     """Tests for Application initialization."""
 
-    def test_init_sets_config(self, mock_config):
-        """Application stores config reference."""
-        app = Application(mock_config)
-        assert app.config == mock_config
+    def test_init_sets_config(self, mock_projects):
+        """Application stores project configs reference."""
+        app = Application(mock_projects)
+        assert app._project_configs == mock_projects
 
-    def test_init_components_none(self, mock_config):
+    def test_init_components_none(self, mock_projects):
         """Components are None before setup."""
-        app = Application(mock_config)
-        assert app.git_watcher is None
-        assert app.llm_client is None
-        assert app.issue_tracker is None
+        app = Application(mock_projects)
+        assert app.project_manager is not None
+        assert app.llm_client_manager is not None
         assert app.scanner is None
 
-    def test_init_stop_event_clear(self, mock_config):
+    def test_init_stop_event_clear(self, mock_projects):
         """Stop event is not set on init."""
-        app = Application(mock_config)
+        app = Application(mock_projects)
         assert not app._stop_event.is_set()
 
 
 class TestApplicationLockFile:
     """Tests for lock file management."""
 
-    def test_acquire_lock_success(self, mock_config):
+    def test_acquire_lock_success(self, mock_projects):
         """Lock can be acquired when file doesn't exist."""
-        app = Application(mock_config)
+        from code_scanner.utils import get_config_dir
+        app = Application(mock_projects)
         
         # Ensure lock doesn't exist
-        if mock_config.lock_path.exists():
-            mock_config.lock_path.unlink()
+        lock_path = get_config_dir() / 'code_scanner.lock'
+        if lock_path.exists():
+            lock_path.unlink()
         
         app._acquire_lock()
         
-        assert mock_config.lock_path.exists()
+        assert lock_path.exists()
         assert app._lock_acquired is True
         
         # Cleanup
         app._release_lock()
 
-    def test_acquire_lock_already_exists(self, mock_config):
+    def test_acquire_lock_already_exists(self, mock_projects):
         """Lock acquisition fails when file exists with running process."""
+        from code_scanner.utils import get_config_dir
         # Create lock file with current PID (simulating running process)
         current_pid = os.getpid()
-        mock_config.lock_path.write_text(f"{current_pid}\n")
+        lock_path = get_config_dir() / 'code_scanner.lock'
+        lock_path.write_text(f"{current_pid}\n")
         
-        app = Application(mock_config)
+        app = Application(mock_projects)
         
         with pytest.raises(LockFileError) as exc_info:
             app._acquire_lock()
@@ -109,24 +100,26 @@ class TestApplicationLockFile:
         assert str(current_pid) in error_msg
         
         # Cleanup
-        mock_config.lock_path.unlink()
+        lock_path.unlink()
 
-    def test_release_lock_removes_file(self, mock_config):
+    def test_release_lock_removes_file(self, mock_projects):
         """Release lock removes file."""
-        app = Application(mock_config)
+        from code_scanner.utils import get_config_dir
+        app = Application(mock_projects)
         
-        if mock_config.lock_path.exists():
-            mock_config.lock_path.unlink()
+        lock_path = get_config_dir() / 'code_scanner.lock'
+        if lock_path.exists():
+            lock_path.unlink()
         
         app._acquire_lock()
-        assert mock_config.lock_path.exists()
+        assert lock_path.exists()
         
         app._release_lock()
-        assert not mock_config.lock_path.exists()
+        assert not lock_path.exists()
 
-    def test_release_lock_not_acquired(self, mock_config):
+    def test_release_lock_not_acquired(self, mock_projects):
         """Release lock does nothing if not acquired."""
-        app = Application(mock_config)
+        app = Application(mock_projects)
         
         # Don't acquire lock
         app._release_lock()  # Should not raise
@@ -135,17 +128,17 @@ class TestApplicationLockFile:
 class TestApplicationSignalHandler:
     """Tests for signal handling."""
 
-    def test_signal_handler_sets_stop(self, mock_config):
+    def test_signal_handler_sets_stop(self, mock_projects):
         """Signal handler sets stop event."""
-        app = Application(mock_config)
+        app = Application(mock_projects)
         
         app._signal_handler(signal.SIGINT, None)
         
         assert app._stop_event.is_set()
 
-    def test_signal_handler_sigterm(self, mock_config):
+    def test_signal_handler_sigterm(self, mock_projects):
         """Signal handler works with SIGTERM."""
-        app = Application(mock_config)
+        app = Application(mock_projects)
         
         app._signal_handler(signal.SIGTERM, None)
         
@@ -155,17 +148,17 @@ class TestApplicationSignalHandler:
 class TestApplicationCleanup:
     """Tests for cleanup functionality."""
 
-    def test_cleanup_sets_stop_event(self, mock_config):
+    def test_cleanup_sets_stop_event(self, mock_projects):
         """Cleanup sets stop event."""
-        app = Application(mock_config)
+        app = Application(mock_projects)
         
         app._cleanup()
         
         assert app._stop_event.is_set()
 
-    def test_cleanup_stops_scanner(self, mock_config):
+    def test_cleanup_stops_scanner(self, mock_projects):
         """Cleanup stops scanner if exists."""
-        app = Application(mock_config)
+        app = Application(mock_projects)
         
         mock_scanner = MagicMock()
         app.scanner = mock_scanner
@@ -174,22 +167,24 @@ class TestApplicationCleanup:
         
         mock_scanner.stop.assert_called_once()
 
-    def test_cleanup_releases_lock(self, mock_config):
+    def test_cleanup_releases_lock(self, mock_projects):
         """Cleanup releases lock."""
-        app = Application(mock_config)
+        from code_scanner.utils import get_config_dir
+        app = Application(mock_projects)
         
-        if mock_config.lock_path.exists():
-            mock_config.lock_path.unlink()
+        lock_path = get_config_dir() / 'code_scanner.lock'
+        if lock_path.exists():
+            lock_path.unlink()
         
         app._acquire_lock()
         
         app._cleanup()
         
-        assert not mock_config.lock_path.exists()
+        assert not lock_path.exists()
 
-    def test_cleanup_handles_no_scanner(self, mock_config):
+    def test_cleanup_handles_no_scanner(self, mock_projects):
         """Cleanup works when scanner is None."""
-        app = Application(mock_config)
+        app = Application(mock_projects)
         app.scanner = None
         
         app._cleanup()  # Should not raise
@@ -203,7 +198,7 @@ class TestParseArgsExtended:
         with patch('sys.argv', ['code-scanner', '/tmp/test']):
             args = parse_args()
         
-        assert args.target_directory == Path('/tmp/test')
+        assert args.projects == ['/tmp/test']
         assert args.config is None
         assert args.commit is None
 
@@ -212,21 +207,21 @@ class TestParseArgsExtended:
         with patch('sys.argv', ['code-scanner', '/tmp/test', '-c', '/path/config.toml']):
             args = parse_args()
         
-        assert args.config == Path('/path/config.toml')
+        assert args.config == [Path('/path/config.toml')]
 
     def test_parse_long_config_flag(self):
         """Parse with long --config flag."""
         with patch('sys.argv', ['code-scanner', '/tmp/test', '--config', '/path/config.toml']):
             args = parse_args()
         
-        assert args.config == Path('/path/config.toml')
+        assert args.config == [Path('/path/config.toml')]
 
     def test_parse_commit_hash(self):
         """Parse with commit hash."""
         with patch('sys.argv', ['code-scanner', '/tmp/test', '--commit', 'abc123']):
             args = parse_args()
         
-        assert args.commit == 'abc123'
+        assert args.commit == ['abc123']
 
     def test_parse_all_options(self):
         """Parse with all options."""
@@ -237,9 +232,9 @@ class TestParseArgsExtended:
         ]):
             args = parse_args()
         
-        assert args.target_directory == Path('/tmp/test')
-        assert args.config == Path('/config.toml')
-        assert args.commit == 'abc123'
+        assert args.projects == ['/tmp/test']
+        assert args.config == [Path('/config.toml')]
+        assert args.commit == ['abc123']
 
 
 class TestMainFunction:
@@ -287,8 +282,9 @@ class TestApplicationBackupOutput:
         mock_config.output_path.write_text("# Existing content\n")
         backup_path = mock_config.output_path.parent / f"{mock_config.output_path.name}.bak"
         
-        app = Application(mock_config)
-        app._backup_existing_output()
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
+        app._backup_existing_output(mock_config.output_path)
         
         # Check backup file was created
         assert backup_path.exists()
@@ -310,8 +306,9 @@ class TestApplicationBackupOutput:
         # Create output file to backup
         mock_config.output_path.write_text("# Second content\n")
         
-        app = Application(mock_config)
-        app._backup_existing_output()
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
+        app._backup_existing_output(mock_config.output_path)
         
         content = backup_path.read_text()
         assert "# First backup" in content
@@ -327,8 +324,9 @@ class TestApplicationBackupOutput:
         if mock_config.output_path.exists():
             mock_config.output_path.unlink()
         
-        app = Application(mock_config)
-        app._backup_existing_output()  # Should not raise
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
+        app._backup_existing_output(mock_config.output_path)  # Should not raise
         
         # No backup file should be created
         backup_path = mock_config.output_path.parent / f"{mock_config.output_path.name}.bak"
@@ -343,7 +341,8 @@ class TestApplicationStaleLockCleanup:
         # Create lock file with non-existent PID
         mock_config.lock_path.write_text("999999999\n")
         
-        app = Application(mock_config)
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
         app._acquire_lock()
         
         # Lock should be acquired
@@ -362,7 +361,8 @@ class TestApplicationRun:
 
     def test_run_keyboard_interrupt(self, mock_config):
         """Run returns 130 on KeyboardInterrupt."""
-        app = Application(mock_config)
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
         
         with patch.object(app, '_setup', side_effect=KeyboardInterrupt):
             result = app.run()
@@ -373,7 +373,8 @@ class TestApplicationRun:
         """Run returns 1 on ConfigError."""
         from code_scanner.config import ConfigError
         
-        app = Application(mock_config)
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
         
         with patch.object(app, '_setup', side_effect=ConfigError("Test error")):
             result = app.run()
@@ -382,7 +383,8 @@ class TestApplicationRun:
 
     def test_run_lock_file_error(self, mock_config):
         """Run returns 1 on LockFileError."""
-        app = Application(mock_config)
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
         
         with patch.object(app, '_setup', side_effect=LockFileError("Lock exists")):
             result = app.run()
@@ -391,7 +393,8 @@ class TestApplicationRun:
 
     def test_run_unexpected_error(self, mock_config):
         """Run returns 1 on unexpected error."""
-        app = Application(mock_config)
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
         
         with patch.object(app, '_setup', side_effect=RuntimeError("Unexpected")):
             result = app.run()
@@ -400,7 +403,8 @@ class TestApplicationRun:
 
     def test_run_cleanup_always_called(self, mock_config):
         """Cleanup is called even on error."""
-        app = Application(mock_config)
+        projects = [(mock_config.target_directory, mock_config.config_file, mock_config.commit_hash)]
+        app = Application(projects)
         
         with patch.object(app, '_setup', side_effect=RuntimeError("Error")):
             with patch.object(app, '_cleanup') as mock_cleanup:

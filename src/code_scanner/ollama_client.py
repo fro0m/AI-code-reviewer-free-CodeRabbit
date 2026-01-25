@@ -8,8 +8,9 @@ import urllib.error
 import urllib.request
 from typing import Any, Optional
 
-from .base_client import BaseLLMClient, LLMClientError, ContextOverflowError
+from .base_client import BaseLLMClient, LLMClientError, ContextOverflowError, RequestBuilder
 from .models import LLMConfig
+from .error_messages import OllamaErrors, GeneralErrors
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,14 @@ class OllamaClient(BaseLLMClient):
         """Get the human-readable backend name for logging."""
         return "Ollama"
 
+    def is_connected(self) -> bool:
+        """Check if client is connected.
+
+        Returns:
+            True if connected, False otherwise.
+        """
+        return self._connected
+
     def connect(self) -> None:
         """Establish connection to Ollama and validate model.
 
@@ -46,10 +55,7 @@ class OllamaClient(BaseLLMClient):
 
         # Validate model is specified (required for Ollama)
         if not self.config.model:
-            raise LLMClientError(
-                "Ollama backend requires 'model' to be specified in config.\n"
-                "Example: model = \"qwen3:4b\""
-            )
+            raise LLMClientError(OllamaErrors.MODEL_REQUIRED)
 
         self._model_id = self.config.model
 
@@ -61,7 +67,7 @@ class OllamaClient(BaseLLMClient):
                 available_models = [m.get("name", "") for m in data.get("models", [])]
                 
                 if not available_models:
-                    raise LLMClientError("No models available in Ollama")
+                    raise LLMClientError(OllamaErrors.NO_MODELS_AVAILABLE)
 
                 # Check if requested model is available
                 # Ollama model names can be "qwen3" or "qwen3:4b" etc
@@ -75,35 +81,27 @@ class OllamaClient(BaseLLMClient):
 
                 if not model_found:
                     raise LLMClientError(
-                        f"Model '{self._model_id}' not found in Ollama.\n"
-                        f"Available models: {available_models}\n"
-                        f"To pull a model, run: ollama pull {self._model_id}"
+                        OllamaErrors.MODEL_NOT_FOUND.format(
+                            model=self._model_id,
+                            available=", ".join(available_models[:5])
+                        )
                     )
 
                 logger.info(f"Using model: {self._model_id}")
 
         except urllib.error.URLError as e:
             raise LLMClientError(
-                f"\n{'='*70}\n"
-                f"CONNECTION ERROR: Ollama\n"
-                f"{'='*70}\n\n"
-                f"Could not connect to Ollama.\n\n"
-                f"Connection parameters:\n"
-                f"  Backend:  ollama\n"
-                f"  Host:     {self.config.host}\n"
-                f"  Port:     {self.config.port}\n"
-                f"  URL:      {self.config.base_url}\n"
-                f"  Model:    {self._model_id}\n"
-                f"  Timeout:  {self.config.timeout}s\n\n"
-                f"Please ensure:\n"
-                f"1. Ollama is running (ollama serve)\n"
-                f"2. Host and port match your Ollama settings\n"
-                f"3. Model is pulled (ollama pull {self._model_id})\n\n"
-                f"Error: {e}\n"
-                f"{'='*70}"
+                OllamaErrors.CONNECTION_ERROR_TEMPLATE.format(
+                    host=self.config.host,
+                    port=self.config.port,
+                    url=self.config.base_url,
+                    model=self._model_id,
+                    timeout=self.config.timeout,
+                    error=e
+                )
             )
         except json.JSONDecodeError as e:
-            raise LLMClientError(f"Invalid response from Ollama: {e}")
+            raise LLMClientError(OllamaErrors.INVALID_RESPONSE.format(e=e))
 
         # Get context limit from model info
         self._model_context_limit = self._get_model_context_limit()
@@ -194,7 +192,7 @@ class OllamaClient(BaseLLMClient):
             LLMClientError: If not connected or limit unavailable.
         """
         if self._context_limit is None:
-            raise LLMClientError("Not connected or context limit unavailable")
+            raise LLMClientError(OllamaErrors.NOT_CONNECTED_OR_NO_CONTEXT)
         return self._context_limit
 
     @property
@@ -205,7 +203,7 @@ class OllamaClient(BaseLLMClient):
             LLMClientError: If not connected.
         """
         if self._model_id is None:
-            raise LLMClientError("Not connected")
+            raise LLMClientError(OllamaErrors.NOT_CONNECTED)
         return self._model_id
 
     def query(
@@ -232,7 +230,7 @@ class OllamaClient(BaseLLMClient):
             ContextOverflowError: If context limit is exceeded.
         """
         if not self._connected:
-            raise LLMClientError("Not connected")
+            raise LLMClientError(OllamaErrors.NOT_CONNECTED)
 
         last_raw_response = "(no response received)"
 
@@ -244,26 +242,14 @@ class OllamaClient(BaseLLMClient):
                     f"--- USER PROMPT ---\n{user_prompt}\n--- END USER PROMPT ---"
                 )
 
-                # Build request for /api/chat
-                request_data = {
-                    "model": self._model_id,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "stream": False,  # Get complete response
-                    "options": {
-                        "temperature": 0.1,  # Low temperature for consistent output
-                    }
-                }
-
-                # If we have context limit, set it
-                if self._context_limit:
-                    request_data["options"]["num_ctx"] = self._context_limit
-
-                # Add tools if provided (Ollama supports native function calling)
-                if tools:
-                    request_data["tools"] = tools
+                # Build request for /api/chat using RequestBuilder
+                request_data = RequestBuilder.build_ollama_request(
+                    model=self._model_id,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    tools=tools,
+                    context_limit=self._context_limit,
+                )
 
                 url = f"{self.config.base_url}/api/chat"
                 req = urllib.request.Request(
@@ -347,7 +333,7 @@ class OllamaClient(BaseLLMClient):
                 continue
 
             except urllib.error.URLError as e:
-                raise LLMClientError(f"Lost connection to Ollama: {e}")
+                raise LLMClientError(OllamaErrors.LOST_CONNECTION.format(e=e))
 
             except TimeoutError as e:
                 logger.warning(
@@ -376,8 +362,10 @@ class OllamaClient(BaseLLMClient):
         # Show the last raw response to help debug
         raw_preview = last_raw_response[:1000] if len(last_raw_response) > 1000 else last_raw_response
         raise LLMClientError(
-            f"Failed to get valid JSON response after {max_retries} attempts.\n"
-            f"--- Last raw LLM response ---\n{raw_preview}\n--- End raw response ---"
+            OllamaErrors.FAILED_JSON_RESPONSE.format(
+                max_retries=max_retries,
+                preview=raw_preview
+            )
         )
 
     def _try_fix_json_response(self, malformed_content: str) -> Optional[dict]:
@@ -492,6 +480,6 @@ class OllamaClient(BaseLLMClient):
             ValueError: If limit is not positive.
         """
         if limit <= 0:
-            raise ValueError("Context limit must be a positive integer")
+            raise ValueError(GeneralErrors.CONTEXT_LIMIT_MUST_BE_POSITIVE)
         self._context_limit = limit
         logger.info(f"Context limit manually set to: {limit} tokens")

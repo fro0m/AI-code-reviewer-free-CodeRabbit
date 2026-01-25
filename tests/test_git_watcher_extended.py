@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
 
 from code_scanner.git_watcher import GitWatcher, GitError
-from code_scanner.models import GitState, ChangedFile
+from code_scanner.models import FileStatus, GitState, ChangedFile
 
 
 @pytest.fixture
@@ -298,4 +298,4 @@ class TestGitWatcherUnmerged:
         assert changed_files[0].path == "conflict.txt"
         # Status mapping logic:
         # xy = "UU" -> index="U", work="U" -> status="staged" (because U != . and U != ?)
-        assert changed_files[0].status == "staged"
+        assert changed_files[0].status == FileStatus.STAGED

@@ -27,6 +27,9 @@ class ConcreteLLMClient(BaseLLMClient):
     def backend_name(self) -> str:
         return "TestBackend"
 
+    def is_connected(self) -> bool:
+        return True
+
     def wait_for_connection(self, retry_interval: int = 10) -> None:
         pass
 

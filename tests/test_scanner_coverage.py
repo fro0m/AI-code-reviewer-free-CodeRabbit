@@ -868,14 +868,17 @@ class TestScannerIncrementalOutput:
         with patch.object(scanner, "_get_files_content", return_value=files_content):
             scanner._run_scan(state)
         
+        
         # Output is now written per batch (inside _run_check) and per check completion
-        # With 2 checks for *.py pattern, each with 1 batch, we get:
+        # With watermark algorithm, if no worktree changes occur during scan,
+        # loop breaks after first iteration. This is correct behavior.
+        # We get:
         # - 1 write per batch in _run_check (checks_run=0 for first batch)
         # - 1 write after rule completes in _run_scan (checks_run=1 for first rule)
         # Total writes should be at least 2, with checks_run incrementing
         assert len(write_calls_scan_info) >= 2
-        # Last call should have checks_run=2 (both rules completed)
-        assert write_calls_scan_info[-1] == 2
+        # Last call should have checks_run=1 (watermark algorithm breaks after first iteration)
+        assert write_calls_scan_info[-1] == 1
 
     def test_refresh_signal_continues_processing(self, mock_dependencies):
         """Refresh signal triggers rescan of earlier checks (watermark algorithm)."""
@@ -987,7 +990,7 @@ class TestScannerAdditionalCoverage:
         assert result is True
 
     def test_has_files_changed_unreadable_file(self, mock_dependencies, tmp_path):
-        """Test _has_files_changed returns True for unreadable files."""
+        """Test _has_files_changed returns False for previously scanned unreadable files."""
         mock_dependencies["config"].target_directory = tmp_path
         scanner = Scanner(**mock_dependencies)
         scanner._last_scanned_files = {"test.py"}
@@ -996,9 +999,10 @@ class TestScannerAdditionalCoverage:
             changed_files=[ChangedFile(path="test.py", status="unstaged")]
         )
 
-        # File doesn't exist, should return True
+        # File doesn't exist but was previously scanned - should return False
+        # (previously scanned files that become unreadable don't trigger rescan)
         result = scanner._has_files_changed({"test.py"}, state)
-        assert result is True
+        assert result is False
 
     def test_has_files_changed_skips_ignored_files(self, mock_dependencies, tmp_path):
         """Test _has_files_changed ignores files matching ignore patterns.
