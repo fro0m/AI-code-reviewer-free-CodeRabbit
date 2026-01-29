@@ -236,8 +236,23 @@ The scanner supports monitoring **multiple projects simultaneously** and automat
 *   **Active Project Selection:** The project with **most recent changes** becomes active for checks
     *   Uses existing git change detection algorithm (max mtime_ns among changed files)
     *   Project switching is **non-blocking** - waits for current check to complete
+    *   **Switch Timing:** Project switching is evaluated only when the current project completes a scan cycle
+    *   **Verification:** Before switching, verify the target project still has the most recent changes
+    *   **Priority:** Always select project with the single most recently changed file (no priority configuration)
+*   **Project Switching Behavior:**
+    *   **Scan Completion:** When active project completes its scan cycle with no mid-scan changes, scanner immediately switches to another project with uncommitted changes
+    *   **Scan All Eligible Projects:** Scanner continues switching until all projects with uncommitted changes have been scanned
+    *   **Avoid Redundant Scans:** Scanner compares file modification times against "Last updated" timestamp in results file to identify projects that have changes since last scan, avoiding rescanning of already-scanned worktrees
+    *   **All Projects Clean:** When no projects have uncommitted changes, all projects are set to `WAITING_NO_CHANGES` and no project is marked as active
+    *   **User Commits Changes:** When user commits all changes in the active project, scanner immediately switches to another project with changes
+    *   **Switch Takes Precedence:** Project switching takes precedence over completing the current scan cycle - scanner interrupts after the current check completes
+    *   **Cooldown Period:** Minimum 5-minute interval between project switches to prevent bouncing behavior
 *   **State Preservation:** Each project maintains its own state:
-    *   Issue tracker state is preserved in memory for each project
+    *   **Full State Preservation:** All state is preserved in memory for each project including:
+        *   `scan_info` (checks_run, total_checks, files_scanned, skipped_files)
+        *   `last_scanned_files` (set of files scanned in last scan)
+        *   `last_file_contents_hash` (content hashes for change detection)
+        *   `issue_tracker` (detected issues with status)
     *   Switching between projects is seamless - previous project state is retained
     *   State is **not persisted** across restarts (starts fresh each time)
 *   **LLM Client Management:**
@@ -247,6 +262,11 @@ The scanner supports monitoring **multiple projects simultaneously** and automat
 *   **Output Files:** Each project has its own output file:
     *   `code_scanner_results.md` in each project directory
     *   Separate results per project for clear separation
+    *   **Timestamps in Status Messages:** Output files include human-readable timestamps:
+        *   `WAITING_OTHER_PROJECT`: "Waiting - Another project is currently being scanned (inactive since: January 25, 2026 at 9:05 PM UTC)"
+        *   `RUNNING`: "Running - Check 3/10: Check for memory leaks (active since: January 25, 2026 at 9:10 PM UTC)"
+        *   `WAITING_NO_CHANGES`: "Waiting - No uncommitted changes detected (since: January 25, 2026 at 9:15 PM UTC)"
+    *   **Last Updated Header:** Results files include "Last updated: January 25, 2026 at 9:05 PM UTC" to track when last scan occurred
 *   **Logging:** Single global log file with project prefixes:
     *   Log file location (platform-specific):
         *   Windows: `%APPDATA%\code-scanner\code_scanner.log`
@@ -255,19 +275,33 @@ The scanner supports monitoring **multiple projects simultaneously** and automat
     *   Project prefixes: `[project_0]`, `[project_1]`, etc.
     *   System messages use `[SYSTEM]` prefix
     *   INFO-level logging for project switching (not DEBUG)
-*   **Ctags Indexing:** Only active project's ctags index is generated:
-    *   Index is regenerated when switching projects
-    *   Inactive projects do not maintain ctags index (saves memory)
+*   **Ctags Indexing:** Ctags index management for efficient symbol lookups:
+    *   **Active Project Only:** Only the active project's ctags index is maintained in memory
+    *   **Caching:** Index is cached in memory and reused when switching back to a project
+    *   **Cache Invalidation:** Cached index is invalidated based on combination of time and file changes:
+        *   Time-based: Index considered stale after extended period
+        *   File-based: Index regenerated if new/deleted files detected
+    *   **Generation:** Index is generated asynchronously when project becomes active (or regenerated if stale)
+    *   Inactive projects do not maintain ctags index in memory (saves memory)
 *   **Single Instance:** One scanner instance monitors all projects:
     *   Single global lock file (platform-specific):
         *   Windows: `%APPDATA%\code-scanner\code_scanner.lock`
         *   macOS: `~/Library/Application Support/code-scanner/code_scanner.lock`
         *   Linux/Unix: `~/.code-scanner/code_scanner.lock`
     *   Prevents multiple scanner instances running simultaneously
-*   **Use Case:** User works on one project, then switches to another project without restarting code scanner:
-    *   All projects are specified at startup
-    *   User doesn't need to restart with different project/config
-    *   Seamless switching preserves work context
+*   **Use Cases:**
+    *   **Seamless Project Switching:** User works on one project, then switches to another project without restarting code scanner:
+        *   All projects are specified at startup
+        *   User doesn't need to restart with different project/config
+        *   Seamless switching preserves work context
+    *   **Automatic Multi-Project Scanning:** Scanner automatically scans all projects with uncommitted changes:
+        *   Scans projects in order of most recent changes
+        *   Continues until all projects have been scanned
+        *   Avoids rescanning projects that were already scanned after their last file changes
+    *   **Intelligent Activity Detection:** Scanner identifies which project user is actively working on:
+        *   Tracks file modification times across all projects
+        *   Switches to project with most recent changes
+        *   Respects 5-minute minimum cooldown to prevent bouncing
 
 ### 2.5 Service Installation
 

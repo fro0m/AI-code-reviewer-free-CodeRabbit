@@ -25,6 +25,24 @@ class FileStatus(Enum):
     UNTRACKED = "untracked"
     DELETED = "deleted"
 
+    def __post_init__(self):
+        """Convert string status to FileStatus enum for type safety."""
+        if isinstance(self.status, str):
+            # Map string values to enum values
+            status_map = {
+                "staged": FileStatus.STAGED,
+                "unstaged": FileStatus.UNSTAGED,
+                "untracked": FileStatus.UNTRACKED,
+                "deleted": FileStatus.DELETED,
+                "modified": FileStatus.UNSTAGED,  # Map 'modified' to 'unstaged' for backward compatibility
+            }
+            self.status = status_map.get(self.status, FileStatus.UNSTAGED)
+
+    @property
+    def is_deleted(self) -> bool:
+        """Check if file is deleted."""
+        return self.status == FileStatus.DELETED
+
 
 class ScanStatus(Enum):
     """Status of the scan for a project."""
@@ -38,8 +56,11 @@ class ScanStatus(Enum):
     ERROR = "error"
     CONNECTION_LOST = "connection_lost"
 
-    def get_display_text(self, check_index: int = 0, total_checks: int = 0, 
-                         check_query: str = "", error_message: str = "") -> str:
+    def get_display_text(self, check_index: int = 0, total_checks: int = 0,
+                         check_query: str = "", error_message: str = "",
+                         timestamp: Optional[datetime] = None,
+                         inactive_since: Optional[datetime] = None,
+                         active_since: Optional[datetime] = None) -> str:
         """Get the display text for this status.
 
         Args:
@@ -47,19 +68,34 @@ class ScanStatus(Enum):
             total_checks: Total number of checks for RUNNING status.
             check_query: Current check query for RUNNING status.
             error_message: Error message for ERROR or CONNECTION_LOST status.
+            timestamp: Optional timestamp for WAITING statuses (when project became active/inactive).
+            inactive_since: Optional timestamp for WAITING_OTHER_PROJECT status (when project became inactive).
+            active_since: Optional timestamp for RUNNING status (when project became active).
 
         Returns:
             Formatted display text with icon and details.
         """
         icon = self.get_icon()
-        
+
         if self == ScanStatus.RUNNING:
             if check_query:
+                if active_since:
+                    # Format: "January 25, 2026 at 9:05 PM" (local time, no timezone)
+                    ts_str = active_since.strftime("%B %d, %Y at %I:%M %p")
+                    return f"{icon} Running - Check {check_index}/{total_checks}: {check_query} (active since: {ts_str})"
                 return f"{icon} Running - Check {check_index}/{total_checks}: {check_query}"
             return f"{icon} Running - Check {check_index}/{total_checks}"
         elif self == ScanStatus.WAITING_OTHER_PROJECT:
+            if inactive_since:
+                # Format: "January 25, 2026 at 9:05 PM" (local time, no timezone)
+                ts_str = inactive_since.strftime("%B %d, %Y at %I:%M %p")
+                return f"{icon} Waiting - Another project is currently being scanned (inactive since: {ts_str})"
             return f"{icon} Waiting - Another project is currently being scanned"
         elif self == ScanStatus.WAITING_NO_CHANGES:
+            if timestamp:
+                # Format: "January 25, 2026 at 9:05 PM" (local time, no timezone)
+                ts_str = timestamp.strftime("%B %d, %Y at %I:%M %p")
+                return f"{icon} Waiting - No uncommitted changes detected (since: {ts_str})"
             return f"{icon} Waiting - No uncommitted changes detected"
         elif self == ScanStatus.WAITING_MERGE_REBASE:
             return f"{icon} Waiting - Merge/rebase conflict resolution in progress"
@@ -293,7 +329,6 @@ class CheckGroup:
             # Check for directory pattern: /*dirname*/
             if pattern.startswith("/") and pattern.endswith("/") and len(pattern) > 2:
                 dir_pattern = pattern[1:-1]  # Remove leading and trailing /
-                # Check if any directory component matches the pattern
                 path_parts = file_path.replace("\\", "/").split("/")
                 for part in path_parts[:-1]:  # Exclude the filename itself
                     if fnmatch(part, dir_pattern):
@@ -319,7 +354,7 @@ class Project:
     file_filter: Optional["FileFilter"] = None
 
     # State tracking
-    last_activity_time: float = 0.0  # Unix timestamp
+    # Note: last_activity_time field removed (currently unused)
     is_active: bool = False
     last_scanned_files: set[str] = field(default_factory=set)
     last_file_contents_hash: dict[str, int] = field(default_factory=dict)
@@ -331,6 +366,11 @@ class Project:
     total_checks: int = 0  # Total number of checks in current scan
     current_check_query: str = ""  # Current check query being executed
     error_message: str = ""  # Error message for ERROR or CONNECTION_LOST status
+    
+    # New fields for project switching
+    last_scan_time: Optional[datetime] = None  # When this project was last scanned
+    last_switch_time: Optional[datetime] = None  # When scanner last switched to this project
+    inactive_since: Optional[datetime] = None  # When this project became inactive
 
     @property
     def output_path(self) -> Path:

@@ -605,6 +605,14 @@ class Scanner:
                         f"last_file_contents_hash={len(self._last_file_contents_hash)}")
         
         logger.info("Scan cycle complete. Waiting for new file changes...")
+        
+        # Update project's last scan time for redundant scan prevention
+        if self._project and hasattr(self._project, 'last_scan_time'):
+            self._project.last_scan_time = datetime.now(timezone.utc)
+        
+        # Notify application of scan completion for potential project switch
+        if self._project and hasattr(self._project, 'scan_completed_callback'):
+            self._project.scan_completed_callback()
 
     def _filter_batches_by_pattern(
         self,
@@ -927,8 +935,8 @@ class Scanner:
                 if new_count > 0:
                     logger.info(f"Added {new_count} new issue(s) from batch {batch_idx + 1}")
 
-            # Update output after each batch for immediate feedback
-            self.output_generator.write(self.issue_tracker, self._scan_info)
+            # Update output after each batch for immediate feedback (includes status)
+            self._update_output_with_status()
             logger.info(f"Output updated after batch {batch_idx + 1}/{len(batches)}")
 
         return all_issues

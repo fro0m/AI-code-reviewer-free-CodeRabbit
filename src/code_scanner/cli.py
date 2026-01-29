@@ -306,12 +306,22 @@ class Application:
             self.scanner.start()
 
     def _check_and_switch_project(self) -> None:
-        """Check if we should switch to a different project based on recent changes."""
+        """Check if we should switch to a different project based on recent changes.
+        
+        Only switches if:
+        1. New active project is different from current
+        2. Cooldown period has elapsed (5 minutes)
+        """
         active_project = self.project_manager.get_active_project()
         new_active_project = self.project_manager.determine_active_project()
-
+        
         if new_active_project and new_active_project.project_id != active_project.project_id:
-            self._switch_project(new_active_project)
+            # Check if cooldown period has elapsed
+            if self.project_manager.can_switch_to_project(new_active_project.project_id):
+                self._switch_project(new_active_project)
+                logger.info(f"Switched to project {new_active_project.project_id} after cooldown period")
+            else:
+                logger.info(f"Project {new_active_project.project_id} is more active but cooldown period not met, keeping current active project")
 
     def _acquire_lock(self) -> None:
         """Acquire the lock file.

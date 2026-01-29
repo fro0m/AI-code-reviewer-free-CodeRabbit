@@ -3,6 +3,7 @@
 import threading
 from pathlib import Path
 from typing import Optional
+from datetime import datetime, timezone, timedelta
 
 from .models import Project, ScanStatus
 from .utils import logger
@@ -10,14 +11,18 @@ from .utils import logger
 
 class ProjectManager:
     """Manages multiple projects and handles project switching."""
-
+    
+    # Constants
+    COOLDOWN_SECONDS = 300  # 5 minutes in seconds
+    
     def __init__(self):
         """Initialize the project manager."""
         self._projects: dict[str, Project] = {}
         self._active_project_id: Optional[str] = None
         self._previous_active_project_id: Optional[str] = None
         self._lock = threading.RLock()
-
+        self._last_switch_time: Optional[datetime] = None  # Global cooldown tracking
+    
     def add_project(
         self,
         project_id: str,
@@ -45,16 +50,17 @@ class ProjectManager:
         with self._lock:
             self._projects[project_id] = project
         return project
-
+    
     def determine_active_project(self) -> Optional[Project]:
         """Determine which project should be active based on most recent changes.
-
-        Uses existing git change detection algorithm from GitWatcher.
-        The project with the highest max mtime_ns among changed files becomes active.
+        
+        Filters out projects that were already scanned after their last file changes.
 
         Returns:
             The project that should be active, or None if no projects exist.
         """
+        from datetime import datetime, timezone
+
         with self._lock:
             if not self._projects:
                 return None
@@ -80,20 +86,56 @@ class ProjectManager:
                     )
                     project_activity[project_id] = max_mtime
                     logger.debug(f"Project {project_id}: max_mtime_ns={max_mtime}, changed_files_with_mtime={sum(1 for f in state.changed_files if f.mtime_ns is not None)}")
-                else:
-                    logger.debug(f"Project {project_id}: no changes detected")
 
-            # Find project with highest activity
+            # Find project with highest activity, filtering out already-scanned projects
             if not project_activity:
                 # No changes in any project, keep current active
                 logger.debug("No projects with changes, keeping current active project")
                 return self.get_active_project()
 
+            eligible_projects = []
+            current_time = datetime.now(timezone.utc).timestamp()
+            
+            for project_id, project in self._projects.items():
+                if project.git_watcher is None:
+                    logger.debug(f"Project {project_id} has no git watcher, skipping")
+                    continue
+
+                state = project.git_watcher.get_state()
+                if state.has_changes:
+                    # Check if this project has new changes since last scan
+                    if project.last_scan_time is not None:
+                        # Project was scanned before, check if file changes occurred after
+                        has_new_changes = any(
+                            f.mtime_ns is not None and f.mtime_ns > project.last_scan_time.timestamp()
+                                for f in state.changed_files
+                        )
+                    else:
+                        # Project not scanned yet, consider it eligible
+                        has_new_changes = True
+                    
+                    if has_new_changes:
+                        # Find max mtime among changed files
+                        max_mtime = max(
+                            (f.mtime_ns for f in state.changed_files if f.mtime_ns is not None),
+                            default=0.0
+                        )
+                        project_activity[project_id] = max_mtime
+                        eligible_projects.append(project_id)
+                        logger.debug(f"Project {project_id}: max_mtime_ns={max_mtime}, eligible (has new changes since last scan)")
+                    else:
+                        logger.debug(f"Project {project_id}: no changes or already scanned, not eligible")
+
+            if not eligible_projects:
+                # No eligible projects, keep current active
+                logger.debug("No eligible projects with new changes, keeping current active project")
+                return self.get_active_project()
+
             most_active_id = max(project_activity, key=project_activity.get)
-            logger.info(f"Project activity comparison: {project_activity}")
+            logger.info(f"Project activity comparison (filtered): {project_activity}")
             logger.info(f"Selected most active project: {most_active_id} (max_mtime_ns={project_activity[most_active_id]})")
             return self._projects[most_active_id]
-
+    
     def switch_to_project(self, project: Project) -> None:
         """Switch to a different project.
 
@@ -110,9 +152,14 @@ class ProjectManager:
             self._previous_active_project_id = self._active_project_id
             self._active_project_id = project.project_id
 
+            # Update global last switch time
+            self._last_switch_time = datetime.now(timezone.utc)
+
             # Update project states
             for p in self._projects.values():
                 p.is_active = (p.project_id == project.project_id)
+                if p.is_active:
+                    p.scan_status = ScanStatus.RUNNING
 
             logger.info(f"Switched to active project: {project.project_id} ({project.target_directory})")
 
@@ -120,6 +167,7 @@ class ProjectManager:
             if previous_project is not None:
                 logger.info(f"Setting previous project {previous_project.project_id} to WAITING_OTHER_PROJECT")
                 previous_project.scan_status = ScanStatus.WAITING_OTHER_PROJECT
+                previous_project.inactive_since = datetime.now(timezone.utc)
                 if previous_project.output_generator is not None:
                     logger.debug(f"Updating output file for previous project {previous_project.project_id}")
                     previous_project.output_generator.write(
@@ -130,6 +178,8 @@ class ProjectManager:
                         previous_project.total_checks,
                         previous_project.current_check_query,
                         previous_project.error_message,
+                        inactive_since=previous_project.inactive_since,
+                        active_since=None,
                     )
                 else:
                     logger.warning(f"Output generator is None for previous project {previous_project.project_id}")
@@ -209,7 +259,37 @@ class ProjectManager:
                         project.total_checks,
                         project.current_check_query,
                         project.error_message,
+                        inactive_since=project.inactive_since,
+                        active_since=None,
                     )
                 else:
                     logger.warning(f"Output generator is None for project {project.project_id}")
         logger.info(f"Set all projects to status: {status.value}")
+
+    def update_project_last_scan_time(self, project_id: str, scan_time: datetime) -> None:
+        """Update the last scan time for a project.
+
+        Args:
+            project_id: The project ID.
+            scan_time: When the project was last scanned.
+        """
+        with self._lock:
+            project = self._projects.get(project_id)
+            if project is not None:
+                project.last_scan_time = scan_time
+                logger.debug(f"Updated last scan time for project {project_id}: {scan_time}")
+
+    def can_switch_to_project(self, project_id: str) -> bool:
+        """Check if switching to a project is allowed based on global cooldown.
+
+        Args:
+            project_id: The project ID to switch to.
+
+        Returns:
+            True if switching is allowed (cooldown period met), False otherwise.
+        """
+        with self._lock:
+            if self._last_switch_time is not None:
+                time_since_last_switch = (datetime.now(timezone.utc) - self._last_switch_time).total_seconds()
+                return time_since_last_switch >= self.COOLDOWN_SECONDS
+            return True  # No switch time recorded, allow switch
