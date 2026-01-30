@@ -668,7 +668,7 @@ When code exceeds model's context window:
 **Change Detection:**
 - Monitors staged, unstaged, and untracked files
 - Respects `.gitignore` patterns
-- Efficient caching with configurable TTL (default: 1 second)
+- Efficient caching with configurable TTL (default: 5 seconds) for low CPU usage during idle
 - Detects file modifications via content hashes
 
 **Conflict Handling:**

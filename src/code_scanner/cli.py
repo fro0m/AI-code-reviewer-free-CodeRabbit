@@ -215,12 +215,14 @@ class Application:
             load_gitignore=True,
         )
 
-        # Create git watcher
+        # Create git watcher with cache TTL matching the main loop project-switch interval
+        # to avoid excessive git status subprocess calls
         project.git_watcher = GitWatcher(
             config.target_directory,
             config.commit_hash,
             excluded_files=scanner_files,  # Keep for has_changes_since filtering
             file_filter=project.file_filter,  # Use for gitignore matching
+            cache_ttl=5.0,  # Match the main loop interval to reduce CPU usage
         )
         project.git_watcher.connect()
 
@@ -447,8 +449,10 @@ class Application:
         logger.info("Scanner running. Press Ctrl+C to stop.")
         while not self._stop_event.is_set():
             # Check if we should switch projects
+            # Use longer interval (5 seconds) to avoid high CPU from frequent git status calls
+            # Project switching doesn't need real-time responsiveness
             self._check_and_switch_project()
-            time.sleep(0.5)
+            time.sleep(5.0)
 
     def _signal_handler(self, signum: int, _frame: object) -> None:
         """Handle termination signals."""
