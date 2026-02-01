@@ -2,8 +2,7 @@
 
 ![Code Scanner Banner](images/banner.png)
 
-AI-powered code scanner that uses local LLMs (LM Studio or Ollama) to identify issues in your codebase based on configurable checks. **Your code never leaves your machine.**
-
+AI-powered code scanner for immediate, background review of uncommitted changes as you work. Code Scanner continuously monitors your working directory and provides instant feedback on code issues before you commit—helping you catch bugs, style problems, and architectural issues early in your local development workflow. Uses local LLMs (LM Studio or Ollama) to identify issues based on configurable checks. **Your code never leaves your machine.**
 ---
 
 ⭐ **Star this project on GitHub to support its development!** [Code-Scanner on GitHub](https://github.com/ubego/Code-Scanner)
