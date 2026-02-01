@@ -18,7 +18,8 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
+
 
 logger = logging.getLogger(__name__)
 
@@ -548,7 +549,68 @@ class CtagsIndex:
         if not self._is_indexed:
             return []
 
-        return [s for s in self._symbols if self._matches_kind(s.kind, kind)]
+        return list(self.iter_symbols_by_kind(kind))
+
+    def iter_all_symbols(self) -> Iterator[Symbol]:
+        """Iterate over all indexed symbols.
+        
+        Memory-efficient alternative to accessing the full symbol list.
+        
+        Yields:
+            Symbol objects in index order.
+        """
+        if not self._is_indexed:
+            return
+        
+        yield from self._symbols
+    
+    def iter_symbols_in_file(self, file_path: str, kind: Optional[str] = None) -> Iterator[Symbol]:
+        """Iterate over symbols in a specific file.
+        
+        Memory-efficient alternative to get_symbols_in_file.
+        
+        Args:
+            file_path: Relative path to file from repository root.
+            kind: Optional filter by symbol kind.
+            
+        Yields:
+            Symbol objects in line number order.
+        """
+        if not self._is_indexed:
+            return
+        
+        # Normalize path
+        normalized = self._normalize_path(file_path)
+        symbols = self._symbols_by_file.get(normalized, [])
+        
+        # Also try without leading ./
+        if not symbols and normalized.startswith("./"):
+            symbols = self._symbols_by_file.get(normalized[2:], [])
+        elif not symbols and not normalized.startswith("./"):
+            symbols = self._symbols_by_file.get("./" + normalized, [])
+        
+        # Sort and filter
+        for symbol in sorted(symbols, key=lambda s: s.line):
+            if kind is None or self._matches_kind(symbol.kind, kind):
+                yield symbol
+    
+    def iter_symbols_by_kind(self, kind: str) -> Iterator[Symbol]:
+        """Iterate over symbols of a specific kind.
+        
+        Memory-efficient alternative for large codebases.
+        
+        Args:
+            kind: Symbol kind (function, class, variable, etc.).
+            
+        Yields:
+            Symbol objects matching the kind filter.
+        """
+        if not self._is_indexed:
+            return
+        
+        for symbol in self._symbols:
+            if self._matches_kind(symbol.kind, kind):
+                yield symbol
 
     def find_symbols_by_pattern(
         self,

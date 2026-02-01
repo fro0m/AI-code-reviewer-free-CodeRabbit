@@ -1,5 +1,6 @@
 """AI tools for context expansion - allows LLM to request additional codebase information."""
 
+import functools
 import json
 import logging
 import re
@@ -104,9 +105,6 @@ class AIToolExecutor:
         self.ctags_index = ctags_index
         # Reserve some tokens for the tool response structure
         self.chunk_size = min(DEFAULT_CHUNK_SIZE_TOKENS, context_limit // 4)
-        # LRU cache for file contents - avoids re-reading same files
-        self._file_cache: dict[Path, Optional[str]] = {}
-        self._file_cache_max_size = 200
         
         # Tool dispatch table: maps tool name to (handler_name, argument_spec)
         # argument_spec: list of (arg_name, default_value) tuples
@@ -145,6 +143,21 @@ class AIToolExecutor:
             ]),
         }
 
+    @staticmethod
+    @functools.lru_cache(maxsize=200)
+    def _cached_read_file(file_path_str: str) -> Optional[str]:
+        """Read file content with LRU caching.
+        
+        Note: Uses string path as key for hashability with lru_cache.
+        
+        Args:
+            file_path_str: String path to the file.
+            
+        Returns:
+            File content or None if unreadable/binary.
+        """
+        return read_file_content(Path(file_path_str))
+
     def _get_file_content(self, file_path: Path) -> Optional[str]:
         """Get file content with caching.
         
@@ -154,24 +167,11 @@ class AIToolExecutor:
         Returns:
             File content or None if unreadable/binary.
         """
-        if file_path in self._file_cache:
-            return self._file_cache[file_path]
-        
-        content = read_file_content(file_path)
-        
-        # Manage cache size - remove oldest entries if needed
-        if len(self._file_cache) >= self._file_cache_max_size:
-            # Remove first 20% of entries (FIFO-style eviction)
-            keys_to_remove = list(self._file_cache.keys())[:self._file_cache_max_size // 5]
-            for key in keys_to_remove:
-                del self._file_cache[key]
-        
-        self._file_cache[file_path] = content
-        return content
+        return self._cached_read_file(str(file_path))
 
     def clear_file_cache(self) -> None:
         """Clear the file content cache. Call when files change."""
-        self._file_cache.clear()
+        self._cached_read_file.cache_clear()
 
     def _extract_imports_from_content(self, content: str, file_path: str) -> list[dict]:
         """Extract import statements from file content for multiple languages.

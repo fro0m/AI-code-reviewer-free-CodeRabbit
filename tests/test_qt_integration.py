@@ -214,6 +214,8 @@ class TestSampleQtProjectScan:
 
     def test_full_scan_cycle_generates_output(self, temp_repo_with_qt, mock_llm_client, mock_ctags_index):
         """Test that a full scan cycle generates proper output file."""
+        from code_scanner.models import Project, ScanStatus
+        
         config = MagicMock(spec=Config)
         config.target_directory = temp_repo_with_qt
         config.output_file = "results.md"
@@ -232,6 +234,21 @@ class TestSampleQtProjectScan:
         output_path = temp_repo_with_qt / "results.md"
         output_generator = OutputGenerator(output_path)
         
+        # Create mock project with required attributes for _update_output_with_status
+        mock_project = MagicMock(spec=Project)
+        mock_project.scan_status = ScanStatus.RUNNING
+        mock_project.current_check_index = 0
+        mock_project.total_checks = 0
+        mock_project.current_check_query = ""
+        mock_project.error_message = ""
+        mock_project.inactive_since = None
+        mock_project.issue_tracker = issue_tracker
+        mock_project.output_generator = output_generator
+        mock_project.scan_info = {}
+        mock_project.last_scanned_files = set()
+        mock_project.last_file_contents_hash = {}
+        mock_project.last_scan_time = None
+        
         scanner = Scanner(
             config=config,
             git_watcher=git_watcher,
@@ -239,6 +256,7 @@ class TestSampleQtProjectScan:
             issue_tracker=issue_tracker,
             output_generator=output_generator,
             ctags_index=mock_ctags_index,
+            project=mock_project,
         )
         
         # Run scan

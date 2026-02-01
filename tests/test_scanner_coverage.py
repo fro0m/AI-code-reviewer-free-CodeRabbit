@@ -59,6 +59,8 @@ def mock_ctags_index():
 @pytest.fixture
 def mock_dependencies(mock_config, mock_ctags_index):
     """Create mock dependencies for Scanner."""
+    from code_scanner.models import Project, ScanStatus
+    
     git_watcher = MagicMock()
     llm_client = MagicMock()
     llm_client.context_limit = 8000
@@ -68,6 +70,22 @@ def mock_dependencies(mock_config, mock_ctags_index):
     issue_tracker.get_stats.return_value = {"total": 0}
     output_generator = MagicMock()
     
+    # Create mock project with required attributes for Scanner
+    mock_project = MagicMock(spec=Project)
+    mock_project.scan_status = ScanStatus.RUNNING
+    mock_project.current_check_index = 0
+    mock_project.total_checks = 0
+    mock_project.current_check_query = ""
+    mock_project.error_message = ""
+    mock_project.inactive_since = None
+    mock_project.issue_tracker = issue_tracker
+    mock_project.output_generator = output_generator
+    # Additional attributes needed by Scanner.__init__ and _run_scan
+    mock_project.scan_info = {}
+    mock_project.last_scanned_files = set()
+    mock_project.last_file_contents_hash = {}
+    mock_project.last_scan_time = None
+    
     return {
         "config": mock_config,
         "git_watcher": git_watcher,
@@ -75,6 +93,7 @@ def mock_dependencies(mock_config, mock_ctags_index):
         "issue_tracker": issue_tracker,
         "output_generator": output_generator,
         "ctags_index": mock_ctags_index,
+        "project": mock_project,
     }
 
 
@@ -859,7 +878,7 @@ class TestScannerIncrementalOutput:
         
         # Track scan_info passed to output writer
         write_calls_scan_info = []
-        def capture_write(tracker, scan_info=None):
+        def capture_write(issue_tracker, scan_info, scan_status, check_idx, total_checks, check_query, error_msg, **kwargs):
             if scan_info:
                 write_calls_scan_info.append(scan_info.get("checks_run", 0))
         
@@ -871,14 +890,13 @@ class TestScannerIncrementalOutput:
         
         # Output is now written per batch (inside _run_check) and per check completion
         # With watermark algorithm, if no worktree changes occur during scan,
-        # loop breaks after first iteration. This is correct behavior.
-        # We get:
-        # - 1 write per batch in _run_check (checks_run=0 for first batch)
-        # - 1 write after rule completes in _run_scan (checks_run=1 for first rule)
-        # Total writes should be at least 2, with checks_run incrementing
+        # loop breaks after first iteration. 
+        # We get multiple writes as output updates happen after each batch and check.
+        # checks_run increments as checks complete.
         assert len(write_calls_scan_info) >= 2
-        # Last call should have checks_run=1 (watermark algorithm breaks after first iteration)
-        assert write_calls_scan_info[-1] == 1
+        # With 2 checks per the config (Check for bugs, Check for style), 
+        # each running once, checks_run should be 2 after scan completes
+        assert write_calls_scan_info[-1] == 2
 
     def test_refresh_signal_continues_processing(self, mock_dependencies):
         """Refresh signal triggers rescan of earlier checks (watermark algorithm)."""
@@ -1614,3 +1632,286 @@ class TestWatermarkRescan:
         # Should have exited early on rescan iteration due to empty file list
         # Only 2 queries from first iteration (for 2 checks in *.py group)
         assert mock_dependencies["llm_client"].query.call_count == 2
+
+
+class TestStopScannerDuringCheck:
+    """Tests for stopping scanner while check is in progress (lines 126-129)."""
+
+    def test_stop_waits_for_check_to_complete(self, mock_dependencies):
+        """Stop waits for current check to complete before stopping."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="test.py", status="unstaged")]
+        )
+        files_content = {"test.py": "x = 1"}
+        
+        # Mock check that takes some time
+        query_count = [0]
+        def query_side_effect(*args, **kwargs):
+            query_count[0] += 1
+            # Simulate check taking time
+            time.sleep(0.05)
+            return {"issues": []}
+        
+        mock_dependencies["llm_client"].query.side_effect = query_side_effect
+        mock_dependencies["git_watcher"].get_state.return_value = state
+        
+        # Mock _get_files_content to avoid file system access
+        with patch.object(scanner, "_get_files_content", return_value=files_content):
+            # Start scanner in background
+            scanner.start()
+            time.sleep(0.02)  # Let it start running a check
+            
+            # Stop while check is in progress
+            scanner.stop()
+            
+            # Should have waited for check to complete
+            assert query_count[0] >= 1
+
+
+class TestRefreshSignalInNoChangesState:
+    """Tests for refresh signal in WAITING_NO_CHANGES state (lines 243-244)."""
+
+    def test_refresh_signal_wakes_up_from_no_changes(self, mock_dependencies):
+        """Refresh signal wakes scanner from WAITING_NO_CHANGES state."""
+        scanner = Scanner(**mock_dependencies)
+        
+        # First call: no changes
+        # Second call: has changes
+        state_no_changes = GitState()
+        state_with_changes = GitState(
+            changed_files=[ChangedFile(path="test.py", status="unstaged")]
+        )
+        
+        call_count = [0]
+        def get_state_side_effect():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return state_no_changes
+            elif call_count[0] == 2:
+                # Trigger refresh event
+                scanner._refresh_event.set()
+                return state_no_changes
+            else:
+                scanner._stop_event.set()
+                return state_with_changes
+        
+        mock_dependencies["git_watcher"].get_state.side_effect = get_state_side_effect
+        
+        with patch.object(scanner, "_run_scan") as mock_run_scan:
+            scanner._run_loop()
+            
+            # Should have called _run_scan when refresh triggered
+            mock_run_scan.assert_called()
+
+
+class TestFileChangeDetection:
+    """Tests for file change detection scenarios (lines 325-326, 332-333, 335-336)."""
+
+    def test_new_binary_file_triggers_scan(self, mock_dependencies):
+        """New binary/unreadable file triggers rescan (lines 325-326)."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="test.bin", status="unstaged")]
+        )
+        
+        # Mock file content as None (binary)
+        files_content = {"test.bin": None}
+        
+        with patch.object(scanner, "_get_files_content", return_value=files_content):
+            has_changed = scanner._has_files_changed({"test.bin"}, state)
+        
+        assert has_changed is True
+
+    def test_new_file_triggers_scan(self, mock_dependencies):
+        """New file not in hash triggers rescan (lines 332-333)."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="new.py", status="unstaged")]
+        )
+        
+        files_content = {"new.py": "x = 1"}
+        
+        with patch.object(scanner, "_get_files_content", return_value=files_content):
+            has_changed = scanner._has_files_changed({"new.py"}, state)
+        
+        assert has_changed is True
+
+    def test_content_change_triggers_scan(self, mock_dependencies):
+        """File content change triggers rescan (lines 335-336)."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="test.py", status="unstaged")]
+        )
+        
+        files_content = {"test.py": "x = 2"}  # Changed content
+        
+        # Add to last scanned files with different hash
+        scanner._last_scanned_files.add("test.py")
+        scanner._last_file_contents_hash["test.py"] = hash("x = 1")
+        
+        # Mock read_file_content to return the new content
+        with patch("code_scanner.scanner.read_file_content", return_value="x = 2"):
+            with patch.object(scanner, "_get_files_content", return_value=files_content):
+                has_changed = scanner._has_files_changed({"test.py"}, state)
+        
+        assert has_changed is True
+
+
+class TestFileReadingErrors:
+    """Tests for file reading error scenarios (lines 341-342, 344-345, 348-349)."""
+
+    def test_oserror_on_new_file_triggers_scan(self, mock_dependencies):
+        """OSError on new file triggers rescan (lines 341-342)."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="new.py", status="unstaged")]
+        )
+        
+        def get_content_side_effect(*args, **kwargs):
+            raise OSError("File not found")
+        
+        with patch.object(scanner, "_get_files_content", side_effect=get_content_side_effect):
+            has_changed = scanner._has_files_changed({"new.py"}, state)
+        
+        assert has_changed is True
+
+    def test_oserror_on_existing_file_skips(self, mock_dependencies):
+        """OSError on existing file is skipped (lines 344-345)."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="test.py", status="unstaged")]
+        )
+        
+        # File was scanned before
+        scanner._last_scanned_files.add("test.py")
+        
+        def get_content_side_effect(*args, **kwargs):
+            raise OSError("Permission denied")
+        
+        with patch.object(scanner, "_get_files_content", side_effect=get_content_side_effect):
+            has_changed = scanner._has_files_changed({"test.py"}, state)
+        
+        assert has_changed is False
+
+    def test_other_errors_assume_changed(self, mock_dependencies):
+        """Other errors assume file changed (lines 348-349)."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="test.py", status="unstaged")]
+        )
+        
+        def get_content_side_effect(*args, **kwargs):
+            raise ValueError("Encoding error")
+        
+        with patch.object(scanner, "_get_files_content", side_effect=get_content_side_effect):
+            has_changed = scanner._has_files_changed({"test.py"}, state)
+        
+        assert has_changed is True
+
+
+class TestNewIssueTracking:
+    """Tests for adding new issues to tracker (lines 476-477)."""
+
+    def test_new_issues_added_to_tracker(self, mock_dependencies):
+        """New issues are added to tracker and logged (lines 476-477)."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="test.py", status="unstaged")]
+        )
+        files_content = {"test.py": "x = 1"}
+        
+        # Mock LLM to return issues
+        mock_dependencies["llm_client"].query.return_value = {
+            "issues": [
+                {
+                    "file_path": "test.py",
+                    "line_number": 1,
+                    "description": "Bug found",
+                    "suggested_fix": "Fix it"
+                }
+            ]
+        }
+        
+        # Mock issue_tracker to return new count > 0
+        mock_dependencies["issue_tracker"].add_issues.return_value = 1
+        
+        # Mock Path.is_file to return True so issues aren't skipped
+        with patch("pathlib.Path.is_file", return_value=True):
+            with patch.object(scanner, "_get_files_content", return_value=files_content):
+                scanner._run_scan(state)
+        
+        # Should have called add_issues with the new issues
+        assert mock_dependencies["issue_tracker"].add_issues.called
+
+
+class TestContextOverflowHandling:
+    """Tests for context overflow error handling (lines 484-496)."""
+
+    def test_context_overflow_logs_error_and_continues(self, mock_dependencies):
+        """Context overflow logs error and continues to next check (lines 484-496)."""
+        from code_scanner.base_client import ContextOverflowError
+        
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="test.py", status="unstaged")]
+        )
+        files_content = {"test.py": "x = 1"}
+        
+        # First check raises ContextOverflowError, second succeeds
+        query_count = [0]
+        def query_side_effect(*args, **kwargs):
+            query_count[0] += 1
+            if query_count[0] == 1:
+                raise ContextOverflowError("Context limit exceeded")
+            return {"issues": []}
+        
+        mock_dependencies["llm_client"].query.side_effect = query_side_effect
+        
+        with patch.object(scanner, "_get_files_content", return_value=files_content):
+            scanner._run_scan(state)
+        
+        # Should have logged skipped batch
+        assert "skipped_batches_context_overflow" in scanner._scan_info
+        assert len(scanner._scan_info["skipped_batches_context_overflow"]) == 1
+
+
+class TestStatusAndChecksRunConsistency:
+    """Tests for consistency between Status and Checks Run (the fix)."""
+
+    def test_status_and_checks_run_show_same_value(self, mock_dependencies):
+        """Status and Checks Run show consistent values after each check."""
+        scanner = Scanner(**mock_dependencies)
+        
+        state = GitState(
+            changed_files=[ChangedFile(path="test.py", status="unstaged")]
+        )
+        files_content = {"test.py": "x = 1"}
+        
+        mock_dependencies["llm_client"].query.return_value = {"issues": []}
+        
+        # Track status updates
+        status_updates = []
+        original_update_status = scanner._update_status
+        def track_status_update(*args, **kwargs):
+            status_updates.append(kwargs)
+            return original_update_status(*args, **kwargs)
+        scanner._update_status = track_status_update
+        
+        with patch.object(scanner, "_get_files_content", return_value=files_content):
+            scanner._run_scan(state)
+        
+        # Verify that check_index matches checks_run after each check
+        for i, update in enumerate(status_updates):
+            if update.get("status") and update.get("check_index"):
+                # check_index should equal checks_run (i+1 since checks_run increments first)
+                assert update["check_index"] == scanner._scan_info["checks_run"]

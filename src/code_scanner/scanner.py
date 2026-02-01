@@ -456,9 +456,6 @@ class Scanner:
 
                 check_group, check, filtered_batches = check_list[check_idx]
                 logger.info(f"Running check {check_idx + 1}/{total_checks}: {check[:50]}...")
-                
-                # Update running status with current check info
-                self._update_status(ScanStatus.RUNNING, check_idx + 1, total_checks, check)
 
                 # Signal that a check is in progress
                 self._check_in_progress_event.set()
@@ -468,6 +465,10 @@ class Scanner:
                     check_issues = self._run_check(check, filtered_batches)
                     all_issues.extend(check_issues)
                     self._scan_info["checks_run"] += 1
+
+                    # Update running status with current check info AFTER incrementing checks_run
+                    # This ensures Status and Checks Run show consistent values
+                    self._update_status(ScanStatus.RUNNING, self._scan_info["checks_run"], total_checks, check)
 
                     # Immediately add new issues to tracker
                     if check_issues:

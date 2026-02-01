@@ -49,6 +49,126 @@ def _contains_code_fences(text: str) -> bool:
     return '```' in text if text else False
 
 
+class MarkdownBuilder:
+    """Fluent builder for markdown content.
+    
+    Provides a cleaner, more testable API for constructing markdown documents.
+    
+    Example:
+        builder = MarkdownBuilder()
+        content = (builder
+            .add_header(1, "Title")
+            .add_paragraph("Some text")
+            .add_list_item("Item 1")
+            .build())
+    """
+    
+    def __init__(self):
+        """Initialize the builder with empty sections."""
+        self._sections: list[str] = []
+    
+    def add_header(self, level: int, text: str) -> "MarkdownBuilder":
+        """Add a header.
+        
+        Args:
+            level: Header level (1-6).
+            text: Header text.
+            
+        Returns:
+            Self for method chaining.
+        """
+        self._sections.append(f"{'#' * level} {text}")
+        self._sections.append("")
+        return self
+    
+    def add_paragraph(self, text: str) -> "MarkdownBuilder":
+        """Add a paragraph.
+        
+        Args:
+            text: Paragraph text.
+            
+        Returns:
+            Self for method chaining.
+        """
+        self._sections.append(text)
+        self._sections.append("")
+        return self
+    
+    def add_list_item(self, text: str, bold_prefix: Optional[str] = None) -> "MarkdownBuilder":
+        """Add a list item.
+        
+        Args:
+            text: Item text.
+            bold_prefix: Optional bold prefix (e.g., "Status:").
+            
+        Returns:
+            Self for method chaining.
+        """
+        if bold_prefix:
+            self._sections.append(f"- **{bold_prefix}** {text}")
+        else:
+            self._sections.append(f"- {text}")
+        return self
+    
+    def add_empty_line(self) -> "MarkdownBuilder":
+        """Add an empty line.
+        
+        Returns:
+            Self for method chaining.
+        """
+        self._sections.append("")
+        return self
+    
+    def add_horizontal_rule(self) -> "MarkdownBuilder":
+        """Add a horizontal rule.
+        
+        Returns:
+            Self for method chaining.
+        """
+        self._sections.append("---")
+        self._sections.append("")
+        return self
+    
+    def add_code_block(self, content: str, language: str = "") -> "MarkdownBuilder":
+        """Add a code block.
+        
+        Args:
+            content: Code content.
+            language: Optional language hint.
+            
+        Returns:
+            Self for method chaining.
+        """
+        # Only wrap in code fences if content doesn't already contain them
+        if _contains_code_fences(content):
+            self._sections.append(content)
+        else:
+            self._sections.append(f"```{language}")
+            self._sections.append(content)
+            self._sections.append("```")
+        self._sections.append("")
+        return self
+    
+    def add_raw(self, text: str) -> "MarkdownBuilder":
+        """Add raw text without processing.
+        
+        Args:
+            text: Raw text to add.
+            
+        Returns:
+            Self for method chaining.
+        """
+        self._sections.append(text)
+        return self
+    
+    def build(self) -> str:
+        """Build the final markdown content.
+        
+        Returns:
+            Complete markdown string.
+        """
+        return "\n".join(self._sections)
+
 class OutputGenerator:
     """Generates Markdown output file with scan results."""
 

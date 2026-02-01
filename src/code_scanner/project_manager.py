@@ -22,6 +22,45 @@ class ProjectManager:
         self._previous_active_project_id: Optional[str] = None
         self._lock = threading.RLock()
         self._last_switch_time: Optional[datetime] = None  # Global cooldown tracking
+
+    def _update_project_status(
+        self,
+        project: Project,
+        status: ScanStatus,
+        error_message: str = "",
+        inactive_since: Optional[datetime] = None,
+        active_since: Optional[datetime] = None,
+    ) -> None:
+        """Update project status and sync to output file.
+        
+        DRY helper to consolidate repeated status update patterns.
+        
+        Args:
+            project: The project to update.
+            status: The new scan status.
+            error_message: Optional error message.
+            inactive_since: Optional timestamp for WAITING_OTHER_PROJECT status.
+            active_since: Optional timestamp for RUNNING status.
+        """
+        project.scan_status = status
+        project.error_message = error_message
+        if inactive_since is not None:
+            project.inactive_since = inactive_since
+        
+        if project.output_generator is not None:
+            project.output_generator.write(
+                project.issue_tracker,
+                {},
+                project.scan_status,
+                project.current_check_index,
+                project.total_checks,
+                project.current_check_query,
+                project.error_message,
+                inactive_since=project.inactive_since,
+                active_since=active_since,
+            )
+        else:
+            logger.warning(f"Output generator is None for project {project.project_id}")
     
     def add_project(
         self,
@@ -166,23 +205,12 @@ class ProjectManager:
             # Update status for previous project (if exists) to WAITING_OTHER_PROJECT
             if previous_project is not None:
                 logger.info(f"Setting previous project {previous_project.project_id} to WAITING_OTHER_PROJECT")
-                previous_project.scan_status = ScanStatus.WAITING_OTHER_PROJECT
-                previous_project.inactive_since = datetime.now(timezone.utc)
-                if previous_project.output_generator is not None:
-                    logger.debug(f"Updating output file for previous project {previous_project.project_id}")
-                    previous_project.output_generator.write(
-                        previous_project.issue_tracker,
-                        {},
-                        previous_project.scan_status,
-                        previous_project.current_check_index,
-                        previous_project.total_checks,
-                        previous_project.current_check_query,
-                        previous_project.error_message,
-                        inactive_since=previous_project.inactive_since,
-                        active_since=None,
-                    )
-                else:
-                    logger.warning(f"Output generator is None for previous project {previous_project.project_id}")
+                logger.debug(f"Updating output file for previous project {previous_project.project_id}")
+                self._update_project_status(
+                    previous_project,
+                    ScanStatus.WAITING_OTHER_PROJECT,
+                    inactive_since=datetime.now(timezone.utc),
+                )
 
     def get_active_project(self) -> Optional[Project]:
         """Get currently active project.
@@ -248,22 +276,7 @@ class ProjectManager:
         with self._lock:
             for project in self._projects.values():
                 logger.debug(f"Setting project {project.project_id} to status: {status.value}")
-                project.scan_status = status
-                project.error_message = error_message
-                if project.output_generator is not None:
-                    project.output_generator.write(
-                        project.issue_tracker,
-                        {},
-                        project.scan_status,
-                        project.current_check_index,
-                        project.total_checks,
-                        project.current_check_query,
-                        project.error_message,
-                        inactive_since=project.inactive_since,
-                        active_since=None,
-                    )
-                else:
-                    logger.warning(f"Output generator is None for project {project.project_id}")
+                self._update_project_status(project, status, error_message=error_message)
         logger.info(f"Set all projects to status: {status.value}")
 
     def update_project_last_scan_time(self, project_id: str, scan_time: datetime) -> None:

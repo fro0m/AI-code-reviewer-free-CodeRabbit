@@ -22,9 +22,11 @@ classifiers = [
 ]
 
 dependencies = [
-    "openai>=1.0.0",
+    "openai>=1.0.0",     # Used for OpenAI-compatible API client (LM Studio)
     "gitpython>=3.1.0",
     "pathspec>=0.11.0",  # For efficient gitignore pattern matching
+    "rapidfuzz>=3.0.0",  # For fast fuzzy string matching
+    "pydantic>=2.0.0",   # For config validation
 ]
 
 [project.optional-dependencies]

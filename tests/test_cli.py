@@ -52,139 +52,17 @@ class TestParseArgs:
             assert args.commit == ['abc123']
 
 
-class TestApplicationLockFile:
-    """Tests for Application lock file handling."""
 
-    def test_acquire_lock_creates_file(self, tmp_path):
-        """Acquire lock creates lock file."""
-        # Create a single project tuple
-        projects = [(tmp_path, tmp_path / "config.toml", None)]
-        
-        app = Application(projects)
-        app._acquire_lock()
-        
-        # Lock file should be in config directory
-        from code_scanner.utils import get_config_dir
-        lock_path = get_config_dir() / 'code_scanner.lock'
-        assert lock_path.exists()
-        assert app._lock_acquired is True
-        
-        # Cleanup
-        app._release_lock()
-
-    def test_acquire_lock_fails_if_process_running(self, tmp_path):
-        """Acquire lock fails if lock file exists and process is running."""
-        # Create a single project tuple
-        projects = [(tmp_path, tmp_path / "config.toml", None)]
-        
-        # Create existing lock with current process PID (definitely running)
-        from code_scanner.utils import get_config_dir
-        lock_path = get_config_dir() / 'code_scanner.lock'
-        import os
-        lock_path.write_text(str(os.getpid()))
-        
-        app = Application(projects)
-        
-        with pytest.raises(LockFileError, match="Another code-scanner instance is already running"):
-            app._acquire_lock()
-        
-        # Cleanup
-        if lock_path.exists():
-            lock_path.unlink()
-
-    def test_acquire_lock_removes_stale_lock(self, tmp_path):
-        """Acquire lock removes stale lock if process is not running."""
-        # Create a single project tuple
-        projects = [(tmp_path, tmp_path / "config.toml", None)]
-        
-        # Create existing lock with a PID that's definitely not running
-        from code_scanner.utils import get_config_dir
-        lock_path = get_config_dir() / 'code_scanner.lock'
-        lock_path.write_text("999999999")
-        
-        app = Application(projects)
-        app._acquire_lock()
-        
-        # Lock should be acquired with our PID
-        assert app._lock_acquired is True
-        import os
-        assert lock_path.read_text().strip() == str(os.getpid())
-        
-        # Cleanup
-        app._release_lock()
-
-    def test_release_lock_removes_file(self, tmp_path):
-        """Release lock removes lock file."""
-        # Create a single project tuple
-        projects = [(tmp_path, tmp_path / "config.toml", None)]
-        
-        from code_scanner.utils import get_config_dir
-        lock_path = get_config_dir() / 'code_scanner.lock'
-        
-        # Create lock file
-        lock_path.write_text("1234")
-        
-        app = Application(projects)
-        app._lock_acquired = True
-        app._release_lock()
-        
-        assert not lock_path.exists()
-        assert app._lock_acquired is False
-
-    def test_release_lock_does_nothing_if_not_acquired(self, tmp_path):
-        """Release lock does nothing if lock not acquired."""
-        config = MagicMock(spec=Config)
-        config.lock_path = tmp_path / ".code_scanner.lock"
-        
-        # Create file but don't mark as acquired
-        config.lock_path.write_text("1234")
-        
-        app = Application(config)
-        app._lock_acquired = False
-        
-        app._release_lock()
-        
-        # File should still exist
-        assert config.lock_path.exists()
-
-    def test_acquire_lock_registers_atexit_handler(self, tmp_path):
-        """Acquire lock registers atexit handler for cleanup on any exit."""
-        config = MagicMock(spec=Config)
-        config.lock_path = tmp_path / ".code_scanner.lock"
-        
-        app = Application(config)
-        
-        with patch('code_scanner.cli.atexit.register') as mock_atexit:
-            app._acquire_lock()
-            
-            # Verify atexit.register was called with _release_lock
-            mock_atexit.assert_called_once_with(app._release_lock)
-        
-        # Cleanup
-        app._release_lock()
-
-
-    def test_parse_with_commit(self):
-        """Parse with commit hash."""
-        with patch.object(sys, 'argv', ['code-scanner', '/project', '--commit', 'abc123']):
-            args = parse_args()
-            assert args.commit == ['abc123']
-
-    def test_parse_all_options(self):
-        """Parse with all options."""
-        with patch.object(sys, 'argv', [
-            'code-scanner', '/project',
-            '-c', '/config.toml',
-            '--commit', 'abc123'
-        ]):
-            args = parse_args()
-            assert args.projects == ['/project']
-            assert args.config == [Path('/config.toml')]
-            assert args.commit == ['abc123']
 
 
 class TestApplicationLockFile:
     """Tests for Application lock file handling."""
+
+    @pytest.fixture(autouse=True)
+    def mock_config_dir(self, tmp_path):
+        """Mock get_config_dir to use tmp_path."""
+        with patch('code_scanner.utils.get_config_dir', return_value=tmp_path):
+            yield
 
     def test_acquire_lock_creates_file(self, tmp_path):
         """Acquire lock creates lock file."""
