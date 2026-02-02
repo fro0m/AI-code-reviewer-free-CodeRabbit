@@ -422,6 +422,22 @@ class Scanner:
         check_list = build_check_list()
         if not check_list:
             logger.info("No scannable files or checks found")
+            # Still update file tracking to prevent infinite loop!
+            # Without this, _has_files_changed() keeps returning True
+            all_changed_paths = {f.path for f in git_state.changed_files if not f.is_deleted}
+            all_changed_non_ignored = {f for f in all_changed_paths if not self._is_file_ignored(f)}
+            self._last_scanned_files = all_changed_non_ignored
+            # Update hash tracking - read files and compute hashes
+            self._last_file_contents_hash = {}
+            for file_path in all_changed_non_ignored:
+                try:
+                    content = read_file_content(self.config.target_directory / file_path)
+                    if content is not None:
+                        self._last_file_contents_hash[file_path] = hash(content)
+                except Exception:
+                    pass  # Skip files that can't be read
+            # Update status to show we're waiting for changes, not stuck
+            self._update_status(ScanStatus.WAITING_NO_CHANGES)
             return
 
         total_checks = len(check_list)
