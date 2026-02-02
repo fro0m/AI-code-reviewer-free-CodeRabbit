@@ -474,6 +474,12 @@ class AIToolExecutor:
                     timeout=60,  # 60 second timeout
                 )
                 
+                # Check ripgrep return code:
+                # 0 = matches found, 1 = no matches (valid), 2+ = error
+                if result.returncode >= 2:
+                    logger.warning(f"Ripgrep search error for pattern '{pattern}': {result.stderr.strip()}")
+                    continue
+                
                 # Parse JSON lines output
                 for line in result.stdout.strip().split("\n"):
                     if not line:

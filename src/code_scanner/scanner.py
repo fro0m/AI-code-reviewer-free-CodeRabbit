@@ -776,8 +776,11 @@ class Scanner:
         # Using 55% for file content leaves 45% for system prompt & tools
         available_tokens = int(context_limit * 0.55)
         
+        # Pre-compute token counts to avoid repeated estimation
+        file_tokens = {path: estimate_tokens(content) for path, content in files_content.items()}
+        
         # Try all files together first
-        total_tokens = sum(estimate_tokens(c) for c in files_content.values())
+        total_tokens = sum(file_tokens.values())
         if total_tokens <= available_tokens:
             return [files_content]
 
@@ -798,7 +801,7 @@ class Scanner:
 
             for file_path in file_paths:
                 content = files_content[file_path]
-                tokens = estimate_tokens(content)
+                tokens = file_tokens[file_path]
 
                 # Skip files that alone exceed the limit
                 if tokens > available_tokens:
@@ -835,7 +838,7 @@ class Scanner:
                     current_tokens = 0
 
                 for file_path, content in dir_content.items():
-                    tokens = estimate_tokens(content)
+                    tokens = file_tokens[file_path]
                     if current_tokens + tokens <= available_tokens:
                         current_batch[file_path] = content
                         current_tokens += tokens
@@ -1102,6 +1105,13 @@ class Scanner:
                 logger.error(f"LLM client error: {e}")
                 raise
 
+        # Validate response is a dictionary before parsing
+        if not isinstance(response, dict):
+            logger.warning(
+                f"Unexpected LLM response type: {type(response).__name__}. Expected dict."
+            )
+            return []
+        
         # Parse issues from LLM response
         parsed_issues = self._parse_issues_from_response(
             response=response,
