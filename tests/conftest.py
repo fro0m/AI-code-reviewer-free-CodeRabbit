@@ -333,3 +333,44 @@ inline int add(int a, int b) {
         "src/main.cpp": main_cpp.read_text(),
         "src/utils.h": utils_h.read_text(),
     }
+
+
+@pytest.fixture
+def mock_dependencies(mock_config, mock_ctags_index):
+    """Create mock dependencies for Scanner."""
+    from code_scanner.models import Project, ScanStatus
+    
+    git_watcher = MagicMock()
+    llm_client = MagicMock()
+    llm_client.context_limit = 8000
+    issue_tracker = MagicMock()
+    issue_tracker.add_issues.return_value = 0
+    issue_tracker.update_from_scan.return_value = (0, 0)
+    issue_tracker.get_stats.return_value = {"total": 0}
+    output_generator = MagicMock()
+    
+    # Create mock project with required attributes for Scanner
+    mock_project = MagicMock(spec=Project)
+    mock_project.scan_status = ScanStatus.RUNNING
+    mock_project.current_check_index = 0
+    mock_project.total_checks = 0
+    mock_project.current_check_query = ""
+    mock_project.error_message = ""
+    mock_project.inactive_since = None
+    mock_project.issue_tracker = issue_tracker
+    mock_project.output_generator = output_generator
+    # Additional attributes needed by Scanner.__init__ and _run_scan
+    mock_project.scan_info = {}
+    mock_project.last_scanned_files = set()
+    mock_project.last_file_contents_hash = {}
+    mock_project.last_scan_time = None
+    
+    return {
+        "config": mock_config,
+        "git_watcher": git_watcher,
+        "llm_client": llm_client,
+        "issue_tracker": issue_tracker,
+        "output_generator": output_generator,
+        "ctags_index": mock_ctags_index,
+        "project": mock_project,
+    }
