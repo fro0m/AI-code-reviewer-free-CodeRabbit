@@ -287,9 +287,13 @@ class Scanner:
         # Note: _refresh_event being set just means git watcher detected something,
         # but we still need to check if files ACTUALLY changed content-wise
         
+        # Pre-compute ignored files set once to avoid repeated pattern matching
+        # This reduces O(n*m) to O(n) where n=files, m=patterns
+        ignored_files = {f for f in current_files if self._is_file_ignored(f)}
+        
         # Filter out ignored files from current set to match _last_scanned_files
         # (_last_scanned_files only contains non-ignored files after scan completes)
-        current_non_ignored = {f for f in current_files if not self._is_file_ignored(f)}
+        current_non_ignored = current_files - ignored_files
         
         logger.debug(f"_has_files_changed: current_files={len(current_files)}, current_non_ignored={len(current_non_ignored)}, "
                     f"last_scanned={len(self._last_scanned_files)}")
@@ -312,7 +316,8 @@ class Scanner:
             
             # Skip ignored files - they don't affect scan results
             # Skip early to avoid unnecessary hash checks and file reading
-            if self._is_file_ignored(changed_file.path):
+            # Use pre-computed set instead of calling _is_file_ignored again
+            if changed_file.path in ignored_files:
                 continue
             
             file_path = self.config.target_directory / changed_file.path
@@ -365,6 +370,10 @@ class Scanner:
         # Clear file cache since we're starting a new scan with potentially changed files
         self.tool_executor.clear_file_cache()
         
+        # Cache for file content to avoid redundant reads (build_check_list + post-scan)
+        cached_files_content: dict[str, str] | None = None
+        cached_content_hashes: dict[str, int] = {}
+        
         # Set running status
         self._update_status(ScanStatus.RUNNING)
         
@@ -380,6 +389,8 @@ class Scanner:
         # This needs to be rebuilt each iteration to get fresh file content
         def build_check_list() -> list[tuple[CheckGroup, str, list[dict[str, str]]]]:
             """Build list of checks with their filtered batches using fresh file content."""
+            nonlocal cached_files_content, cached_content_hashes
+            
             files_content = self._get_files_content(git_state.changed_files)
             if not files_content:
                 return []
@@ -390,7 +401,15 @@ class Scanner:
                 logger.debug(f"Ignoring {len(ignored)} file(s) matching ignore patterns")
             
             if not filtered_content:
+                # No files to process – clear caches to avoid stale data
+                cached_files_content = None
+                cached_content_hashes = {}
                 return []
+            
+            # Cache for reuse after scan completes (avoid redundant reads)
+            cached_files_content = filtered_content
+            # Pre-compute hashes to avoid duplicate hash() calls
+            cached_content_hashes = {path: hash(content) for path, content in filtered_content.items()}
 
             # Update scan info - preserve checks_run count across iterations
             existing_checks_run = self._scan_info.get("checks_run", 0) if self._scan_info else 0
@@ -451,6 +470,9 @@ class Scanner:
         # Store total_checks in scan_info for output
         self._scan_info["total_checks"] = total_checks
 
+        # Update output immediately with total checks count
+        self._update_status(ScanStatus.RUNNING, 0, total_checks)
+
         logger.info(f"Created {total_checks} check(s) to run")
 
         # Watermark loop: run checks until no changes occur during the run
@@ -463,6 +485,9 @@ class Scanner:
                 if not check_list:
                     logger.info("No scannable files after refresh")
                     break
+                
+                # Update status for rescan
+                self._update_status(ScanStatus.RUNNING, self._scan_info["checks_run"], total_checks)
 
             last_change_at: int | None = None
 
@@ -473,17 +498,23 @@ class Scanner:
                 check_group, check, filtered_batches = check_list[check_idx]
                 logger.info(f"Running check {check_idx + 1}/{total_checks}: {check[:50]}...")
 
+                # Update running status with current check info BEFORE running it
+                # This ensures user sees what check is currently running
+                self._update_status(ScanStatus.RUNNING, self._scan_info["checks_run"], total_checks, check)
+
                 # Signal that a check is in progress
                 self._check_in_progress_event.set()
 
                 try:
-                    # Run check against filtered batches (uses fresh content per batch)
-                    check_issues = self._run_check(check, filtered_batches)
+                    # Run check against filtered batches
+                    # Note: filtered_batches is already filtered by check_group.pattern in build_check_list()
+                    check_batches = filtered_batches
+
+                    check_issues = self._run_check(check, check_batches)
                     all_issues.extend(check_issues)
                     self._scan_info["checks_run"] += 1
-
-                    # Update running status with current check info AFTER incrementing checks_run
-                    # This ensures Status and Checks Run show consistent values
+                    
+                    # Update status again after completion (incremented count)
                     self._update_status(ScanStatus.RUNNING, self._scan_info["checks_run"], total_checks, check)
 
                     # Immediately add new issues to tracker
@@ -491,9 +522,6 @@ class Scanner:
                         new_count = self.issue_tracker.add_issues(check_issues)
                         if new_count > 0:
                             logger.info(f"Added {new_count} new issue(s) to tracker")
-
-                    # Update output file after every check for incremental progress
-                    self._update_output_with_status()
                 except ContextOverflowError as e:
                     # Context overflow despite dynamic token tracking - this indicates
                     # our token estimation or limits are miscalculated. Log as ERROR.
@@ -576,12 +604,13 @@ class Scanner:
 
         # Determine which files have actually changed content since last scan
         # Only resolve issues for files with changed content (LLM results are non-deterministic)
-        files_content = self._get_files_content(git_state.changed_files)
-        files_content, _ = self._filter_ignored_files(files_content)
+        # Use cached content from build_check_list to avoid redundant file reads
+        files_content = cached_files_content or {}
         
         actually_changed_files: list[str] = []
-        for file_path, content in files_content.items():
-            current_hash = hash(content)
+        for file_path in files_content:
+            # Use pre-computed hashes to avoid duplicate hash() calls
+            current_hash = cached_content_hashes.get(file_path) or hash(files_content[file_path])
             previous_hash = self._last_file_contents_hash.get(file_path)
             if previous_hash is None or current_hash != previous_hash:
                 # File is new or content changed - issues can be resolved if not re-reported
@@ -607,10 +636,8 @@ class Scanner:
         all_changed_non_ignored = {f for f in all_changed_paths if not self._is_file_ignored(f)}
         self._last_scanned_files = all_changed_non_ignored
         
-        # Update hash tracking with current content (reuse files_content from above)
-        self._last_file_contents_hash = {}
-        for file_path, content in files_content.items():
-            self._last_file_contents_hash[file_path] = hash(content)
+        # Use pre-computed hashes instead of recomputing
+        self._last_file_contents_hash = cached_content_hashes.copy()
         
         # Save scan state to project for persistence across project switches
         if self._project is not None:
