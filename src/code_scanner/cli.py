@@ -139,7 +139,7 @@ class Application:
         # Determine initial active project
         active_project = self.project_manager.determine_active_project()
         if active_project:
-            self.project_manager.switch_to_project(active_project)
+            self.project_manager.switch_to_project(active_project, skip_cooldown=True)
             self._initialize_scanner(active_project)
             # Set all inactive projects to WAITING_OTHER_PROJECT
             all_projects = self.project_manager.get_all_projects()

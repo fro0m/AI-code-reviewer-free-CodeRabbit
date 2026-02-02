@@ -175,13 +175,14 @@ class ProjectManager:
             logger.info(f"Selected most active project: {most_active_id} (max_mtime_ns={project_activity[most_active_id]})")
             return self._projects[most_active_id]
     
-    def switch_to_project(self, project: Project) -> None:
+    def switch_to_project(self, project: Project, skip_cooldown: bool = False) -> None:
         """Switch to a different project.
 
         This is non-blocking - waits for current check to complete.
 
         Args:
             project: The project to switch to.
+            skip_cooldown: If True, don't update _last_switch_time (for initial selection).
         """
         with self._lock:
             if self._active_project_id == project.project_id:
@@ -191,8 +192,9 @@ class ProjectManager:
             self._previous_active_project_id = self._active_project_id
             self._active_project_id = project.project_id
 
-            # Update global last switch time
-            self._last_switch_time = datetime.now(timezone.utc)
+            # Update global last switch time (unless skipped for initial selection)
+            if not skip_cooldown:
+                self._last_switch_time = datetime.now(timezone.utc)
 
             # Update project states
             for p in self._projects.values():

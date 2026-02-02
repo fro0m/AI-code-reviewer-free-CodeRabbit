@@ -93,6 +93,42 @@ class TestProjectSwitchingCooldown:
             mock_dt.now.return_value = datetime.now(timezone.utc) + timedelta(minutes=4, seconds=59)
             assert not pm.can_switch_to_project("project2")
 
+    def test_initial_switch_with_skip_cooldown_allows_immediate_switch(self):
+        """Initial project selection with skip_cooldown=True shouldn't trigger cooldown."""
+        pm = ProjectManager()
+
+        project1 = pm.add_project(
+            project_id="project1",
+            target_directory=Path("/tmp/project1"),
+            config_file=Path("/tmp/config1.toml"),
+            config=Mock(),
+        )
+        project2 = pm.add_project(
+            project_id="project2",
+            target_directory=Path("/tmp/project2"),
+            config_file=Path("/tmp/config2.toml"),
+            config=Mock(),
+        )
+
+        # Initial switch with skip_cooldown=True (simulates Application._setup())
+        pm.switch_to_project(project1, skip_cooldown=True)
+        
+        # Should NOT have set _last_switch_time
+        assert pm._last_switch_time is None
+        assert pm.get_active_project() == project1
+        
+        # Should allow immediate switch to project2 (no cooldown blocking)
+        assert pm.can_switch_to_project("project2")
+        
+        # Now switch normally (without skip_cooldown)
+        pm.switch_to_project(project2)
+        
+        # Now _last_switch_time should be set
+        assert pm._last_switch_time is not None
+        
+        # And further switches should be blocked by cooldown
+        assert not pm.can_switch_to_project("project1")
+
 
 class TestStatePreservation:
     """Tests for state preservation across switches."""
