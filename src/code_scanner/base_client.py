@@ -248,6 +248,9 @@ class RequestBuilder:
         tools: Optional[list[dict[str, Any]]] = None,
         context_limit: Optional[int] = None,
         temperature: float = 0.1,
+        top_p: float = 0.85,
+        top_k: int = 35,
+        repeat_penalty: float = 1.05,
     ) -> dict[str, Any]:
         """Build an Ollama-specific chat request.
         
@@ -258,6 +261,9 @@ class RequestBuilder:
             tools: Optional list of tool definitions for function calling.
             context_limit: Optional context limit in tokens.
             temperature: Temperature parameter (default 0.1 for consistent output).
+            top_p: Top-p (nucleus) sampling parameter (default 0.85).
+            top_k: Top-k sampling parameter (default 35).
+            repeat_penalty: Repeat penalty parameter (default 1.05).
         
         Returns:
             Request dictionary formatted for Ollama API.
@@ -271,6 +277,9 @@ class RequestBuilder:
             "stream": False,
             "options": {
                 "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "repeat_penalty": repeat_penalty,
             }
         }
         
@@ -292,6 +301,7 @@ class RequestBuilder:
         tools: Optional[list[dict[str, Any]]] = None,
         context_limit: Optional[int] = None,
         temperature: float = 0.1,
+        top_p: float = 0.85,
         reasoning_effort: str = "high",
         response_format: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
@@ -304,6 +314,7 @@ class RequestBuilder:
             tools: Optional list of tool definitions for function calling.
             context_limit: Optional context limit in tokens (passed as max_tokens).
             temperature: Temperature parameter (default 0.1 for consistent output).
+            top_p: Top-p (nucleus) sampling parameter (default 0.85).
             reasoning_effort: Reasoning effort level (default "high").
             response_format: Optional response format specification (e.g., {"type": "json_object"}).
         
@@ -317,6 +328,7 @@ class RequestBuilder:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
+            "top_p": top_p,
             "reasoning_effort": reasoning_effort,
         }
         

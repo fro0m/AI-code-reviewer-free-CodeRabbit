@@ -399,7 +399,10 @@ class OllamaClient(BaseLLMClient):
                 ],
                 "stream": False,
                 "options": {
-                    "temperature": 0.0,
+                    "temperature": 0.1,
+                    "top_p": 0.85,
+                    "top_k": 35,
+                    "repeat_penalty": 1.05,
                 }
             }
 

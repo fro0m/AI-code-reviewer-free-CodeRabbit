@@ -383,7 +383,8 @@ class LMStudioClient(BaseLLMClient):
                         "content": f"Extract the JSON from this response:\n\n{malformed_content[:4000]}"
                     },
                 ],
-                "temperature": 0.0,  # Very low temperature for deterministic output
+                "temperature": 0.1,
+                "top_p": 0.85,
             }
 
             # Add response_format if supported
