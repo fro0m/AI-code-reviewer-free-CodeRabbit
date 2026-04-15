@@ -59,11 +59,7 @@ scoop install git universal-ctags ripgrep
 
 ### Step 2: Install Code Scanner
 
-```bash
-pip install code-scanner
-```
-
-Or using uv (recommended):
+Using uv (recommended):
 ```bash
 uv pip install code-scanner
 ```
@@ -232,12 +228,6 @@ Find improvement opportunities:
 - **ripgrep** (for fast code search)
 
 ### Install Code Scanner
-
-#### Using pip
-
-```bash
-pip install code-scanner
-```
 
 #### Using uv (recommended)
 
