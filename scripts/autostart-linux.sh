@@ -202,7 +202,8 @@ show_status() {
 # Main
 case "${1:-}" in
     install)
-        install_service "$2"
+        shift
+        install_service "$*"
         ;;
     remove)
         remove_service
