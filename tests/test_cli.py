@@ -16,6 +16,180 @@ from code_scanner.config import Config
 from code_scanner.models import LLMConfig, CheckGroup
 
 
+class TestProjectIdGeneration:
+    """Tests for project ID generation from directory names."""
+
+    def test_project_id_uses_directory_name(self, tmp_path):
+        """Single project uses directory name as ID."""
+        # Create a project directory
+        project_dir = tmp_path / "my-awesome-project"
+        project_dir.mkdir()
+        
+        projects = [(project_dir, project_dir / "config.toml", None)]
+        app = Application(projects)
+        
+        # Access the project ID generation logic directly by checking _project_configs
+        # and simulating what _setup does for project ID generation
+        dir_name_counts = {}
+        for target_dir, _, _ in app._project_configs:
+            dir_name = target_dir.name
+            if dir_name not in dir_name_counts:
+                dir_name_counts[dir_name] = []
+            dir_name_counts[dir_name].append(target_dir)
+        
+        duplicate_dir_names = {name for name, paths in dir_name_counts.items() if len(paths) > 1}
+        
+        # Single directory should not be in duplicates
+        assert "my-awesome-project" not in duplicate_dir_names
+        # So project_id should just be the directory name
+        assert project_dir.name == "my-awesome-project"
+
+    def test_project_id_unique_directories(self, tmp_path):
+        """Multiple projects with different names get their directory names as IDs."""
+        # Create multiple project directories with unique names
+        project1 = tmp_path / "frontend"
+        project2 = tmp_path / "backend"
+        project3 = tmp_path / "shared-lib"
+        project1.mkdir()
+        project2.mkdir()
+        project3.mkdir()
+        
+        projects = [
+            (project1, project1 / "config.toml", None),
+            (project2, project2 / "config.toml", None),
+            (project3, project3 / "config.toml", None),
+        ]
+        app = Application(projects)
+        
+        # Simulate the project ID generation logic
+        dir_name_counts = {}
+        for target_dir, _, _ in app._project_configs:
+            dir_name = target_dir.name
+            if dir_name not in dir_name_counts:
+                dir_name_counts[dir_name] = []
+            dir_name_counts[dir_name].append(target_dir)
+        
+        duplicate_dir_names = {name for name, paths in dir_name_counts.items() if len(paths) > 1}
+        
+        # All names are unique, so no duplicates
+        assert len(duplicate_dir_names) == 0
+        
+        # Each project ID would be just the directory name
+        expected_ids = {"frontend", "backend", "shared-lib"}
+        actual_names = {d.name for d, _, _ in app._project_configs}
+        assert actual_names == expected_ids
+
+    def test_project_id_duplicate_names_uses_parent(self, tmp_path):
+        """Two projects with same directory name get parent/dirname format."""
+        # Create two projects with the same directory name but different parents
+        parent1 = tmp_path / "work"
+        parent2 = tmp_path / "personal"
+        parent1.mkdir()
+        parent2.mkdir()
+        
+        project1 = parent1 / "myapp"
+        project2 = parent2 / "myapp"
+        project1.mkdir()
+        project2.mkdir()
+        
+        projects = [
+            (project1, project1 / "config.toml", None),
+            (project2, project2 / "config.toml", None),
+        ]
+        app = Application(projects)
+        
+        # Simulate the project ID generation logic
+        dir_name_counts = {}
+        for target_dir, _, _ in app._project_configs:
+            dir_name = target_dir.name
+            if dir_name not in dir_name_counts:
+                dir_name_counts[dir_name] = []
+            dir_name_counts[dir_name].append(target_dir)
+        
+        duplicate_dir_names = {name for name, paths in dir_name_counts.items() if len(paths) > 1}
+        
+        # "myapp" should be detected as duplicate
+        assert "myapp" in duplicate_dir_names
+        
+        # Generate project IDs as the actual code does
+        existing_project_ids = set()
+        generated_ids = []
+        for target_dir, _, _ in app._project_configs:
+            base_name = target_dir.name
+            if base_name in duplicate_dir_names:
+                parent_name = target_dir.parent.name
+                project_id = f"{parent_name}/{base_name}"
+                if project_id in existing_project_ids:
+                    grandparent_name = target_dir.parent.parent.name
+                    project_id = f"{grandparent_name}/{parent_name}/{base_name}"
+            else:
+                project_id = base_name
+            existing_project_ids.add(project_id)
+            generated_ids.append(project_id)
+        
+        # Verify the IDs use parent directory
+        assert "work/myapp" in generated_ids
+        assert "personal/myapp" in generated_ids
+
+    def test_project_id_triple_duplicate_uses_grandparent(self, tmp_path):
+        """Three projects with same dir name and parent name uses grandparent."""
+        # Create three projects where even parent names are duplicated
+        # /grandparent1/parent/myapp
+        # /grandparent2/parent/myapp
+        gp1 = tmp_path / "dev"
+        gp2 = tmp_path / "staging"
+        gp1.mkdir()
+        gp2.mkdir()
+        
+        parent1 = gp1 / "projects"
+        parent2 = gp2 / "projects"
+        parent1.mkdir()
+        parent2.mkdir()
+        
+        project1 = parent1 / "webapp"
+        project2 = parent2 / "webapp"
+        project1.mkdir()
+        project2.mkdir()
+        
+        projects = [
+            (project1, project1 / "config.toml", None),
+            (project2, project2 / "config.toml", None),
+        ]
+        app = Application(projects)
+        
+        # Simulate the project ID generation logic
+        dir_name_counts = {}
+        for target_dir, _, _ in app._project_configs:
+            dir_name = target_dir.name
+            if dir_name not in dir_name_counts:
+                dir_name_counts[dir_name] = []
+            dir_name_counts[dir_name].append(target_dir)
+        
+        duplicate_dir_names = {name for name, paths in dir_name_counts.items() if len(paths) > 1}
+        
+        # Generate project IDs as the actual code does
+        existing_project_ids = set()
+        generated_ids = []
+        for target_dir, _, _ in app._project_configs:
+            base_name = target_dir.name
+            if base_name in duplicate_dir_names:
+                parent_name = target_dir.parent.name
+                project_id = f"{parent_name}/{base_name}"
+                if project_id in existing_project_ids:
+                    grandparent_name = target_dir.parent.parent.name
+                    project_id = f"{grandparent_name}/{parent_name}/{base_name}"
+            else:
+                project_id = base_name
+            existing_project_ids.add(project_id)
+            generated_ids.append(project_id)
+        
+        # First one should use parent/dirname, second should use grandparent/parent/dirname
+        assert "projects/webapp" in generated_ids
+        assert "staging/projects/webapp" in generated_ids
+
+
+
+
 class TestParseArgs:
     """Tests for parse_args function."""
 

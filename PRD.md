@@ -272,7 +272,7 @@ The scanner supports monitoring **multiple projects simultaneously** and automat
         *   Windows: `%APPDATA%\code-scanner\code_scanner.log`
         *   macOS: `~/Library/Application Support/code-scanner/code_scanner.log`
         *   Linux/Unix: `~/.code-scanner/code_scanner.log`
-    *   Project prefixes: `[project_0]`, `[project_1]`, etc.
+    *   Project prefixes: `[dirname]`, `[parent/dirname]`, etc. (using target directory name, with parent path for disambiguation when needed)
     *   System messages use `[SYSTEM]` prefix
     *   INFO-level logging for project switching (not DEBUG)
 *   **Ctags Indexing:** Ctags index management for efficient symbol lookups:

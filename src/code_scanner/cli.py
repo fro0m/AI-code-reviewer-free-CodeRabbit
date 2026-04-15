@@ -110,13 +110,29 @@ class Application:
         )
 
         # Initialize all projects
+        # First pass: detect duplicate directory names
+        dir_name_counts: dict[str, list[Path]] = {}
+        for target_dir, _, _ in self._project_configs:
+            dir_name = target_dir.name
+            if dir_name not in dir_name_counts:
+                dir_name_counts[dir_name] = []
+            dir_name_counts[dir_name].append(target_dir)
+        
+        # Determine which directory names need disambiguation
+        duplicate_dir_names = {name for name, paths in dir_name_counts.items() if len(paths) > 1}
+        
         existing_project_ids = set()
         for i, (target_dir, config_file, commit_hash) in enumerate(self._project_configs):
             # Generate meaningful project ID from directory name
             base_name = target_dir.name
-            if base_name in existing_project_ids:
-                # Handle duplicates by appending counter
-                project_id = f"{base_name}_{i}"
+            if base_name in duplicate_dir_names:
+                # Use parent directory to disambiguate
+                parent_name = target_dir.parent.name
+                project_id = f"{parent_name}/{base_name}"
+                # If still duplicate, add more parent levels
+                if project_id in existing_project_ids:
+                    grandparent_name = target_dir.parent.parent.name
+                    project_id = f"{grandparent_name}/{parent_name}/{base_name}"
             else:
                 project_id = base_name
             

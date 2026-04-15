@@ -343,7 +343,7 @@ class CheckGroup:
 class Project:
     """Represents a monitored project with all its components."""
 
-    project_id: str  # Unique identifier (e.g., "project_1")
+    project_id: str  # Unique identifier (e.g., "my-project" or "parent/my-project")
     target_directory: Path
     config_file: Path
     config: "Config"
