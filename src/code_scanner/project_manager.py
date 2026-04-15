@@ -204,13 +204,23 @@ class ProjectManager:
 
             logger.info(f"Switched to active project: {project.project_id} ({project.target_directory})")
 
-            # Update status for previous project (if exists) to WAITING_OTHER_PROJECT
+            # Update status for previous project (if exists)
             if previous_project is not None:
-                logger.info(f"Setting previous project {previous_project.project_id} to WAITING_OTHER_PROJECT")
+                # Determine new status based on whether it still has changes
+                # (e.g. if we switched away due to cooldown but it wasn't finished, 
+                # or if it finished scanning)
+                new_status = ScanStatus.WAITING_NO_CHANGES
+                
+                if previous_project.git_watcher:
+                    state = previous_project.git_watcher.get_state()
+                    if state.has_changes:
+                        new_status = ScanStatus.WAITING_OTHER_PROJECT
+                
+                logger.info(f"Setting previous project {previous_project.project_id} to {new_status.value}")
                 logger.debug(f"Updating output file for previous project {previous_project.project_id}")
                 self._update_project_status(
                     previous_project,
-                    ScanStatus.WAITING_OTHER_PROJECT,
+                    new_status,
                     inactive_since=datetime.now(timezone.utc),
                 )
 

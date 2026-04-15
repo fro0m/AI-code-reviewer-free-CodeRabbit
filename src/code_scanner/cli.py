@@ -110,8 +110,17 @@ class Application:
         )
 
         # Initialize all projects
+        existing_project_ids = set()
         for i, (target_dir, config_file, commit_hash) in enumerate(self._project_configs):
-            project_id = f"project_{i}"
+            # Generate meaningful project ID from directory name
+            base_name = target_dir.name
+            if base_name in existing_project_ids:
+                # Handle duplicates by appending counter
+                project_id = f"{base_name}_{i}"
+            else:
+                project_id = base_name
+            
+            existing_project_ids.add(project_id)
             logger.info(f"Initializing project {project_id}: {target_dir}")
 
             # Load config
@@ -145,8 +154,15 @@ class Application:
             all_projects = self.project_manager.get_all_projects()
             for project in all_projects:
                 if project.project_id != active_project.project_id:
-                    project.scan_status = ScanStatus.WAITING_OTHER_PROJECT
-                    logger.info(f"Setting inactive project {project.project_id} to WAITING_OTHER_PROJECT")
+                    # Determine appropriate status based on changes
+                    state = project.git_watcher.get_state()
+                    if state.has_changes:
+                        project.scan_status = ScanStatus.WAITING_OTHER_PROJECT
+                        logger.info(f"Setting inactive project {project.project_id} to WAITING_OTHER_PROJECT (has changes)")
+                    else:
+                        project.scan_status = ScanStatus.WAITING_NO_CHANGES
+                        logger.info(f"Setting inactive project {project.project_id} to WAITING_NO_CHANGES (no changes)")
+                    
                     if project.output_generator is not None:
                         project.output_generator.write(
                             project.issue_tracker,

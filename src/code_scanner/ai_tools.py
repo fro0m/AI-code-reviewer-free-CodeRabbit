@@ -453,10 +453,9 @@ class AIToolExecutor:
             if is_regex:
                 cmd.append("--regexp")
             else:
+                cmd.append("--fixed-strings")
                 if match_whole_word:
                     cmd.append("--word-regexp")
-                else:
-                    cmd.append("--fixed-strings")
             
             # File type/glob filter
             if file_pattern:
