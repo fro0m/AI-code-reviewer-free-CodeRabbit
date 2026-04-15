@@ -50,6 +50,29 @@ find_code_scanner() {
     fi
 }
 
+reinstall_app() {
+    print_info "Reinstalling code-scanner to ensure latest version..."
+    
+    # Try different package managers in order of preference
+    if command -v uv &> /dev/null; then
+        print_info "Using uv to reinstall..."
+        uv pip install --upgrade code-scanner 2>/dev/null || \
+        uv pip install --upgrade -e . 2>/dev/null || \
+        print_warning "uv reinstall skipped (not in a code-scanner directory)"
+    elif command -v poetry &> /dev/null && [[ -f "pyproject.toml" ]]; then
+        print_info "Using poetry to reinstall..."
+        poetry install
+    elif command -v pip &> /dev/null; then
+        print_info "Using pip to reinstall..."
+        pip install --upgrade code-scanner 2>/dev/null || \
+        pip install --upgrade -e . 2>/dev/null || \
+        print_warning "pip reinstall skipped (not in a code-scanner directory)"
+    else
+        print_warning "No package manager found. Skipping reinstall."
+        print_warning "Please manually run: pip install --upgrade code-scanner"
+    fi
+}
+
 test_launch() {
     local scanner_cmd="$1"
     local cli_args="$2"
@@ -91,9 +114,21 @@ check_legacy() {
     local new_exec="$1"
 
     if [[ -f "$PLIST_FILE" ]]; then
+        local current_exec=""
+        local wrapper_script="$HOME/.code-scanner/launch-wrapper.sh"
+        if [[ -f "$wrapper_script" ]]; then
+            # Extract the exec line from wrapper script (last line with actual command)
+            current_exec=$(grep "^exec " "$wrapper_script" | sed 's/^exec //')
+        fi
+
         print_warning "Found existing autostart configuration."
         echo ""
-        echo "  Existing plist: $PLIST_FILE"
+        if [[ -n "$current_exec" ]]; then
+            echo "  Current: $current_exec"
+            echo "  New:     $new_exec"
+        else
+            echo "  Existing plist: $PLIST_FILE"
+        fi
         echo ""
         read -p "Replace existing configuration? (y/N): " response
         if [[ ! "$response" =~ ^[Yy]$ ]]; then
@@ -114,6 +149,9 @@ install_service() {
         print_error "Missing CLI command. Usage: $0 install \"<cli_command>\""
         exit 1
     fi
+
+    # Reinstall app to ensure latest version
+    reinstall_app
 
     # Find code-scanner
     local scanner_cmd

@@ -38,6 +38,30 @@ if "%~2"=="" (
 
 set "CLI_ARGS=%~2"
 
+REM Reinstall app to ensure latest version
+echo [INFO] Reinstalling code-scanner to ensure latest version...
+where uv >nul 2>&1
+if not errorlevel 1 (
+    echo [INFO] Using uv to reinstall...
+    uv pip install --upgrade code-scanner 2>nul || (
+        uv pip install --upgrade -e . 2>nul || (
+            echo [WARNING] uv reinstall skipped
+        )
+    )
+) else (
+    where pip >nul 2>&1
+    if not errorlevel 1 (
+        echo [INFO] Using pip to reinstall...
+        pip install --upgrade code-scanner 2>nul || (
+            pip install --upgrade -e . 2>nul || (
+                echo [WARNING] pip reinstall skipped
+            )
+        )
+    ) else (
+        echo [WARNING] No package manager found. Please manually run: pip install --upgrade code-scanner
+    )
+)
+
 REM Find code-scanner
 set "SCANNER_CMD="
 where code-scanner >nul 2>&1 && set "SCANNER_CMD=code-scanner"
@@ -101,6 +125,17 @@ REM Check for existing task
 schtasks /query /tn "%TASK_NAME%" >nul 2>&1
 if not errorlevel 1 (
     echo [WARNING] Found existing autostart task.
+    REM Try to read current command from wrapper script
+    set "CURRENT_WRAPPER=%USERPROFILE%\.code-scanner\launch-wrapper.bat"
+    if exist "!CURRENT_WRAPPER!" (
+        echo.
+        echo   Current: 
+        REM Show last line of wrapper script (the actual command)
+        for /f "usebackq delims=" %%a in ("!CURRENT_WRAPPER!") do set "CURRENT_CMD=%%a"
+        echo   !CURRENT_CMD!
+        echo   New:     %SCANNER_CMD% %CLI_ARGS%
+        echo.
+    )
     set /p "REPLACE=Replace existing configuration? (y/N): "
     if /i not "!REPLACE!"=="y" (
         echo [INFO] Installation cancelled.
