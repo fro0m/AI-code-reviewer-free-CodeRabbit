@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import __version__
 from .config import Config, ConfigError, load_config
 from .ctags_index import CtagsIndex, CtagsNotFoundError, CtagsError
 from .ai_tools import RipgrepNotFoundError, verify_ripgrep
@@ -71,7 +72,15 @@ class Application:
             self._setup()
             self._run_main_loop()
             return 0
-        except (ConfigError, GitError, LLMClientError, LockFileError, CtagsNotFoundError, CtagsError, RipgrepNotFoundError) as e:
+        except (
+            ConfigError,
+            GitError,
+            LLMClientError,
+            LockFileError,
+            CtagsNotFoundError,
+            CtagsError,
+            RipgrepNotFoundError,
+        ) as e:
             logger.error(str(e))
             return 1
         except KeyboardInterrupt:
@@ -91,11 +100,12 @@ class Application:
         """Set up all projects and components."""
         # Get config directory (platform-specific)
         from .utils import get_config_dir
+
         config_dir = get_config_dir()
-        
+
         # Print paths
-        log_path = config_dir / 'code_scanner.log'
-        lock_path = config_dir / 'code_scanner.lock'
+        log_path = config_dir / "code_scanner.log"
+        lock_path = config_dir / "code_scanner.lock"
         print(f"Log file: {log_path}")
         print(f"Lock file: {lock_path}")
 
@@ -103,11 +113,7 @@ class Application:
         self._acquire_lock()
 
         # Set up logging with project prefix support
-        setup_logging(
-            log_file=log_path,
-            debug=self._debug,
-            project_manager=self.project_manager
-        )
+        setup_logging(log_file=log_path, debug=self._debug, project_manager=self.project_manager)
 
         # Initialize all projects
         # First pass: detect duplicate directory names
@@ -117,10 +123,10 @@ class Application:
             if dir_name not in dir_name_counts:
                 dir_name_counts[dir_name] = []
             dir_name_counts[dir_name].append(target_dir)
-        
+
         # Determine which directory names need disambiguation
         duplicate_dir_names = {name for name, paths in dir_name_counts.items() if len(paths) > 1}
-        
+
         existing_project_ids = set()
         for i, (target_dir, config_file, commit_hash) in enumerate(self._project_configs):
             # Generate meaningful project ID from directory name
@@ -135,7 +141,7 @@ class Application:
                     project_id = f"{grandparent_name}/{parent_name}/{base_name}"
             else:
                 project_id = base_name
-            
+
             existing_project_ids.add(project_id)
             logger.info(f"Initializing project {project_id}: {target_dir}")
 
@@ -174,11 +180,15 @@ class Application:
                     state = project.git_watcher.get_state()
                     if state.has_changes:
                         project.scan_status = ScanStatus.WAITING_OTHER_PROJECT
-                        logger.info(f"Setting inactive project {project.project_id} to WAITING_OTHER_PROJECT (has changes)")
+                        logger.info(
+                            f"Setting inactive project {project.project_id} to WAITING_OTHER_PROJECT (has changes)"
+                        )
                     else:
                         project.scan_status = ScanStatus.WAITING_NO_CHANGES
-                        logger.info(f"Setting inactive project {project.project_id} to WAITING_NO_CHANGES (no changes)")
-                    
+                        logger.info(
+                            f"Setting inactive project {project.project_id} to WAITING_NO_CHANGES (no changes)"
+                        )
+
                     if project.output_generator is not None:
                         project.output_generator.write(
                             project.issue_tracker,
@@ -190,7 +200,9 @@ class Application:
                             project.error_message,
                         )
                     else:
-                        logger.warning(f"Output generator is None for inactive project {project.project_id}")
+                        logger.warning(
+                            f"Output generator is None for inactive project {project.project_id}"
+                        )
         else:
             # No active project found, set all projects to WAITING_NO_CHANGES
             self.project_manager.set_all_projects_status(ScanStatus.WAITING_NO_CHANGES)
@@ -235,9 +247,7 @@ class Application:
         for group in config.check_groups:
             if not group.checks:  # Empty checks = ignore pattern
                 # Split pattern by comma to get individual patterns
-                config_ignore_patterns.extend(
-                    p.strip() for p in group.pattern.split(",")
-                )
+                config_ignore_patterns.extend(p.strip() for p in group.pattern.split(","))
 
         # Create unified file filter for efficient filtering
         project.file_filter = FileFilter(
@@ -341,21 +351,25 @@ class Application:
 
     def _check_and_switch_project(self) -> None:
         """Check if we should switch to a different project based on recent changes.
-        
+
         Only switches if:
         1. New active project is different from current
         2. Cooldown period has elapsed (5 minutes)
         """
         active_project = self.project_manager.get_active_project()
         new_active_project = self.project_manager.determine_active_project()
-        
+
         if new_active_project and new_active_project.project_id != active_project.project_id:
             # Check if cooldown period has elapsed
             if self.project_manager.can_switch_to_project(new_active_project.project_id):
                 self._switch_project(new_active_project)
-                logger.info(f"Switched to project {new_active_project.project_id} after cooldown period")
+                logger.info(
+                    f"Switched to project {new_active_project.project_id} after cooldown period"
+                )
             else:
-                logger.info(f"Project {new_active_project.project_id} is more active but cooldown period not met, keeping current active project")
+                logger.info(
+                    f"Project {new_active_project.project_id} is more active but cooldown period not met, keeping current active project"
+                )
 
     def _acquire_lock(self) -> None:
         """Acquire the lock file.
@@ -367,7 +381,8 @@ class Application:
             LockFileError: If another instance is already running.
         """
         from .utils import get_config_dir
-        lock_path = get_config_dir() / 'code_scanner.lock'
+
+        lock_path = get_config_dir() / "code_scanner.lock"
 
         if lock_path.exists():
             # Read PID from lock file
@@ -408,10 +423,10 @@ class Application:
 
     def _is_process_running(self, pid: int) -> bool:
         """Check if a process with the given PID is running.
-        
+
         Args:
             pid: Process ID to check.
-            
+
         Returns:
             True if the process is running, False otherwise.
         """
@@ -426,7 +441,8 @@ class Application:
         """Release the lock file."""
         if self._lock_acquired:
             from .utils import get_config_dir
-            lock_path = get_config_dir() / 'code_scanner.lock'
+
+            lock_path = get_config_dir() / "code_scanner.lock"
             try:
                 if lock_path.exists():
                     lock_path.unlink()
@@ -446,13 +462,13 @@ class Application:
         """
         if output_path.exists():
             backup_path = output_path.parent / f"{output_path.name}.bak"
-            timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
             try:
-                content = output_path.read_text(encoding='utf-8')
+                content = output_path.read_text(encoding="utf-8")
 
                 # Append to backup file with timestamp separator
-                with open(backup_path, "a", encoding='utf-8') as f:
+                with open(backup_path, "a", encoding="utf-8") as f:
                     f.write(f"\n\n{'=' * 60}\n")
                     f.write(f"Backup created: {timestamp}\n")
                     f.write(f"{'=' * 60}\n\n")
@@ -533,7 +549,8 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "-c", "--config",
+        "-c",
+        "--config",
         type=Path,
         default=None,
         action="append",  # Allow multiple -c flags
@@ -551,11 +568,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {__version__}",
     )
 
     parser.add_argument(
-        "-d", "--debug",
+        "-d",
+        "--debug",
         action="store_true",
         default=False,
         help="Enable debug logging to console and log file (default: INFO level)",

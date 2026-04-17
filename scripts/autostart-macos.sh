@@ -21,6 +21,32 @@ print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+show_installed_info() {
+    if command -v code-scanner &> /dev/null; then
+        local installed_path
+        installed_path=$(command -v code-scanner)
+        local installed_version
+        installed_version=$(code-scanner --version 2>/dev/null || echo "unknown")
+        print_info "Installed code-scanner: $installed_path ($installed_version)"
+    else
+        print_info "code-scanner is not currently installed on PATH."
+    fi
+
+    local wrapper_script="$HOME/.code-scanner/launch-wrapper.sh"
+    if [[ -f "$wrapper_script" ]]; then
+        local exec_line
+        exec_line=$(grep "^exec " "$wrapper_script" | sed 's/^exec //')
+        # Strip "sleep 60" line is separate; exec line has the actual command
+        # Strip the scanner binary (code-scanner or "uv run code-scanner")
+        local cli_cmd
+        cli_cmd=$(echo "$exec_line" | sed 's|^code-scanner ||' | sed 's|^uv run code-scanner ||')
+        if [[ -n "$cli_cmd" ]]; then
+            echo ""
+            print_info "Current <cli_command> is \"$cli_cmd\""
+        fi
+    fi
+}
+
 usage() {
     echo "Code Scanner Autostart Management - macOS"
     echo ""
@@ -47,29 +73,6 @@ find_code_scanner() {
     else
         print_error "Could not find code-scanner or uv. Please install code-scanner first."
         exit 1
-    fi
-}
-
-reinstall_app() {
-    print_info "Reinstalling code-scanner to ensure latest version..."
-    
-    # Try different package managers in order of preference
-    if command -v uv &> /dev/null; then
-        print_info "Using uv to reinstall..."
-        uv pip install --upgrade code-scanner 2>/dev/null || \
-        uv pip install --upgrade -e . 2>/dev/null || \
-        print_warning "uv reinstall skipped (not in a code-scanner directory)"
-    elif command -v poetry &> /dev/null && [[ -f "pyproject.toml" ]]; then
-        print_info "Using poetry to reinstall..."
-        poetry install
-    elif command -v pip &> /dev/null; then
-        print_info "Using pip to reinstall..."
-        pip install --upgrade code-scanner 2>/dev/null || \
-        pip install --upgrade -e . 2>/dev/null || \
-        print_warning "pip reinstall skipped (not in a code-scanner directory)"
-    else
-        print_warning "No package manager found. Skipping reinstall."
-        print_warning "Please manually run: pip install --upgrade code-scanner"
     fi
 }
 
@@ -121,24 +124,26 @@ check_legacy() {
             current_exec=$(grep "^exec " "$wrapper_script" | sed 's/^exec //')
         fi
 
-        print_warning "Found existing autostart configuration."
-        echo ""
-        if [[ -n "$current_exec" ]]; then
-            echo "  Current: $current_exec"
-            echo "  New:     $new_exec"
-        else
-            echo "  Existing plist: $PLIST_FILE"
-        fi
-        echo ""
-        read -p "Replace existing configuration? (y/N): " response
-        if [[ ! "$response" =~ ^[Yy]$ ]]; then
-            print_info "Installation cancelled."
-            exit 0
-        fi
+        if [[ -z "$current_exec" || "$current_exec" != "$new_exec" ]]; then
+            print_warning "Found existing autostart configuration:"
+            echo ""
+            if [[ -n "$current_exec" ]]; then
+                echo "  Current: $current_exec"
+                echo "  New:     $new_exec"
+            else
+                echo "  Existing plist: $PLIST_FILE"
+            fi
+            echo ""
+            read -p "Replace existing configuration? (y/N): " response
+            if [[ ! "$response" =~ ^[Yy]$ ]]; then
+                print_info "Installation cancelled."
+                exit 0
+            fi
 
-        # Unload old service before replacing
-        print_info "Unloading existing service..."
-        launchctl unload "$PLIST_FILE" 2>/dev/null || true
+            # Unload old service before replacing
+            print_info "Unloading existing service..."
+            launchctl unload "$PLIST_FILE" 2>/dev/null || true
+        fi
     fi
 }
 
@@ -149,9 +154,6 @@ install_service() {
         print_error "Missing CLI command. Usage: $0 install \"<cli_command>\""
         exit 1
     fi
-
-    # Reinstall app to ensure latest version
-    reinstall_app
 
     # Find code-scanner
     local scanner_cmd
@@ -253,6 +255,8 @@ show_status() {
 }
 
 # Main
+show_installed_info
+
 case "${1:-}" in
     install)
         install_service "$2"

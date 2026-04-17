@@ -8,6 +8,7 @@ set -e
 SERVICE_NAME="code-scanner"
 USER_SERVICE_DIR="$HOME/.config/systemd/user"
 SERVICE_FILE="$USER_SERVICE_DIR/$SERVICE_NAME.service"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Colors for output
 RED='\033[0;31m'
@@ -20,6 +21,55 @@ print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+show_installed_info() {
+    if command -v code-scanner &> /dev/null; then
+        local installed_path
+        installed_path=$(command -v code-scanner)
+        local installed_version
+        installed_version=$(code-scanner --version 2>/dev/null || echo "unknown")
+        print_info "Installed code-scanner: $installed_path ($installed_version)"
+    else
+        print_info "code-scanner is not currently installed on PATH."
+    fi
+
+    if [[ -f "$SERVICE_FILE" ]]; then
+        local exec_line
+        exec_line=$(grep "^ExecStart=" "$SERVICE_FILE" | cut -d= -f2-)
+        if [[ "$exec_line" == /bin/bash* ]]; then
+            local inner
+            inner=$(echo "$exec_line" | sed "s|/bin/bash -c '||" | sed "s|'$||")
+            inner=$(echo "$inner" | sed "s|^sleep [0-9]* && ||")
+            local cli_cmd
+            cli_cmd=$(echo "$inner" | sed 's|^code-scanner ||' | sed 's|^uv run code-scanner ||')
+            echo ""
+            print_info "Current <cli_command> is \"$cli_cmd\""
+        fi
+    fi
+}
+
+reinstall_from_source() {
+    if ! command -v uv &> /dev/null; then
+        print_warning "uv not found. Skipping reinstall from source."
+        return
+    fi
+
+    if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+        print_warning "No pyproject.toml found at $PROJECT_ROOT. Skipping reinstall."
+        return
+    fi
+
+    print_info "Reinstalling code-scanner from source: $PROJECT_ROOT"
+    uv pip install "$PROJECT_ROOT" 2>&1
+    if [[ $? -ne 0 ]]; then
+        print_error "Failed to reinstall code-scanner from source."
+        exit 1
+    fi
+
+    local new_version
+    new_version=$(code-scanner --version 2>/dev/null || echo "unknown")
+    print_success "Reinstalled code-scanner: $new_version"
+}
 
 usage() {
     echo "Code Scanner Autostart Management - Linux"
@@ -47,29 +97,6 @@ find_code_scanner() {
     else
         print_error "Could not find code-scanner or uv. Please install code-scanner first."
         exit 1
-    fi
-}
-
-reinstall_app() {
-    print_info "Reinstalling code-scanner to ensure latest version..."
-    
-    # Try different package managers in order of preference
-    if command -v uv &> /dev/null; then
-        print_info "Using uv to reinstall..."
-        uv pip install --upgrade code-scanner 2>/dev/null || \
-        uv pip install --upgrade -e . 2>/dev/null || \
-        print_warning "uv reinstall skipped (not in a code-scanner directory)"
-    elif command -v poetry &> /dev/null && [[ -f "pyproject.toml" ]]; then
-        print_info "Using poetry to reinstall..."
-        poetry install
-    elif command -v pip &> /dev/null; then
-        print_info "Using pip to reinstall..."
-        pip install --upgrade code-scanner 2>/dev/null || \
-        pip install --upgrade -e . 2>/dev/null || \
-        print_warning "pip reinstall skipped (not in a code-scanner directory)"
-    else
-        print_warning "No package manager found. Skipping reinstall."
-        print_warning "Please manually run: pip install --upgrade code-scanner"
     fi
 }
 
@@ -122,20 +149,22 @@ check_legacy() {
             current_exec=$(echo "$current_exec" | sed "s|/bin/bash -c '||" | sed "s|'$||")
         fi
 
-        print_warning "Found existing autostart configuration:"
-        echo ""
-        echo "  Current: $current_exec"
-        echo "  New:     $new_exec"
-        echo ""
-        read -p "Replace existing configuration? (y/N): " response
-        if [[ ! "$response" =~ ^[Yy]$ ]]; then
-            print_info "Installation cancelled."
-            exit 0
-        fi
+        if [[ "$current_exec" != "$new_exec" ]]; then
+            print_warning "Found existing autostart with different configuration:"
+            echo ""
+            echo "  Current: $current_exec"
+            echo "  New:     $new_exec"
+            echo ""
+            read -p "Replace existing configuration? (y/N): " response
+            if [[ ! "$response" =~ ^[Yy]$ ]]; then
+                print_info "Installation cancelled."
+                exit 0
+            fi
 
-        # Stop old service before replacing
-        print_info "Stopping existing service..."
-        systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+            # Stop old service before replacing
+            print_info "Stopping existing service..."
+            systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+        fi
     fi
 }
 
@@ -146,9 +175,6 @@ install_service() {
         print_error "Missing CLI command. Usage: $0 install \"<cli_command>\""
         exit 1
     fi
-
-    # Reinstall app to ensure latest version
-    reinstall_app
 
     # Find code-scanner
     local scanner_cmd
@@ -229,6 +255,8 @@ show_status() {
 }
 
 # Main
+show_installed_info
+
 case "${1:-}" in
     install)
         shift

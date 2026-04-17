@@ -9,6 +9,33 @@ set "TASK_NAME=CodeScanner"
 set "SCRIPT_DIR=%~dp0"
 
 if "%~1"=="" goto :usage
+if "%~1"=="install" goto :precheck
+if "%~1"=="remove" goto :precheck
+if "%~1"=="status" goto :precheck
+goto :usage
+
+:precheck
+where code-scanner >nul 2>&1
+if not errorlevel 1 (
+    for /f "delims=" %%p in ('where code-scanner') do set "INSTALLED_PATH=%%p"
+    for /f "delims=" %%v in ('code-scanner --version 2^>nul') do set "INSTALLED_VERSION=%%v"
+    echo [INFO] Installed code-scanner: %INSTALLED_PATH% (%INSTALLED_VERSION%)
+) else (
+    echo [INFO] code-scanner is not currently installed on PATH.
+)
+
+set "WRAPPER_SCRIPT=%USERPROFILE%\.code-scanner\launch-wrapper.bat"
+if exist "%WRAPPER_SCRIPT%" (
+    set "CURRENT_CMD="
+    for /f "usebackq skip=3 delims=" %%a in ("%WRAPPER_SCRIPT%") do set "CURRENT_CMD=%%a"
+    if not "!CURRENT_CMD!"=="" (
+        set "CLI_CMD=!CURRENT_CMD:code-scanner =!"
+        set "CLI_CMD=!CLI_CMD:uv run code-scanner =!"
+        echo.
+        echo [INFO] Current ^<cli_command^> is "!CLI_CMD!"
+    )
+)
+
 if "%~1"=="install" goto :install
 if "%~1"=="remove" goto :remove
 if "%~1"=="status" goto :status
@@ -37,30 +64,6 @@ if "%~2"=="" (
 )
 
 set "CLI_ARGS=%~2"
-
-REM Reinstall app to ensure latest version
-echo [INFO] Reinstalling code-scanner to ensure latest version...
-where uv >nul 2>&1
-if not errorlevel 1 (
-    echo [INFO] Using uv to reinstall...
-    uv pip install --upgrade code-scanner 2>nul || (
-        uv pip install --upgrade -e . 2>nul || (
-            echo [WARNING] uv reinstall skipped
-        )
-    )
-) else (
-    where pip >nul 2>&1
-    if not errorlevel 1 (
-        echo [INFO] Using pip to reinstall...
-        pip install --upgrade code-scanner 2>nul || (
-            pip install --upgrade -e . 2>nul || (
-                echo [WARNING] pip reinstall skipped
-            )
-        )
-    ) else (
-        echo [WARNING] No package manager found. Please manually run: pip install --upgrade code-scanner
-    )
-)
 
 REM Find code-scanner
 set "SCANNER_CMD="

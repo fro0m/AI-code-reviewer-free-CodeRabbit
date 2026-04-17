@@ -19,7 +19,7 @@ The primary objective of this project is to implement a software program that **
         *   Linux/Unix: `~/.code-scanner`
     *   **Log and Lock Files:** The log file (`code_scanner.log`) and lock file (`code_scanner.lock`) are stored in the platform-specific configuration directory.
 *   **Prerequisites:** The following tools must be installed:
-    *   **Python 3.10 or higher** - Required runtime
+    *   **Python 3.11 or higher** - Required runtime
     *   **Git** - For tracking file changes
     *   **Universal Ctags** - For symbol indexing and navigation
     *   **ripgrep** - For fast code search (used by AI tools)
@@ -314,11 +314,21 @@ The scanner can be installed as a system service to start automatically on boot.
 All scripts include:
 
 *   **60-second startup delay** to allow LLM servers to initialize.
+*   **Reinstall from source:** The `install` command automatically rebuilds and reinstalls code-scanner from the project source directory (using `uv pip install`) before setting up the service. This ensures the service always runs the latest version from the current sources.
+*   **Current configuration display:** Scripts display the currently installed code-scanner version/path and the current `<cli_command>` from the existing service (if installed) at startup.
 *   **Test launch** before registering the service.
 *   **Legacy service detection** and removal.
 *   **Full CLI command support:** Scripts accept a full CLI command string as a single argument for multi-project support:
     *   Example: `./scripts/autostart-linux.sh install "/path/to/project1 -c /path/to/config1 /path/to/project2 -c /path/to/config2"`
     *   Script automatically detects code-scanner executable
+
+### 2.6 Version Management
+
+The version is defined in a **single source of truth** in `pyproject.toml` (`version` field). All other locations read it dynamically:
+
+*   `src/code_scanner/__init__.py` reads version from package metadata via `importlib.metadata.version("code-scanner")`.
+*   `src/code_scanner/cli.py` imports `__version__` from the package and uses it in `--version` output.
+*   The version should **never** be hardcoded in multiple files.
 
 ### 2.6 Sample Configuration Checks
 

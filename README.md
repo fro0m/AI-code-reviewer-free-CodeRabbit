@@ -222,7 +222,7 @@ Find improvement opportunities:
 
 ### System Requirements
 
-- **Python 3.10 or higher**
+- **Python 3.11 or higher**
 - **Git** (for tracking file changes)
 - **Universal Ctags** (for symbol indexing)
 - **ripgrep** (for fast code search)
@@ -475,6 +475,8 @@ Start-Process -WindowStyle Hidden code-scanner -ArgumentList "/path/to/project"
 ### Autostart on Boot
 
 Run Code Scanner automatically when your system starts:
+
+The `install` command automatically reinstalls code-scanner from the project source before configuring the service, ensuring the latest version is always deployed.
 
 **Linux:**
 ```bash
