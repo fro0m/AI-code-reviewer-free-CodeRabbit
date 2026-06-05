@@ -14,7 +14,7 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
-from .models import LLMConfig, CheckGroup
+from .models import LLMConfig, CheckGroup, ScanMode
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ class Config:
     config_file: Path
     check_groups: list[CheckGroup]
     commit_hash: Optional[str] = None
+    scan_mode: ScanMode = ScanMode.UNCOMMITTED
     llm: LLMConfig = field(default_factory=LLMConfig)
     debug: bool = False  # Enable debug logging
 
@@ -86,6 +87,7 @@ def load_config(
     target_directory: Path,
     config_file: Optional[Path] = None,
     commit_hash: Optional[str] = None,
+    scan_mode: ScanMode = ScanMode.UNCOMMITTED,
     debug: bool = False,
 ) -> Config:
     """Load configuration from TOML file.
@@ -95,6 +97,7 @@ def load_config(
         config_file: Optional path to config file. If not provided,
                     looks in the script directory.
         commit_hash: Optional commit hash to compare against.
+        scan_mode: Operation mode (uncommitted or branch). Defaults to uncommitted.
         debug: Enable debug logging (default: False, INFO level).
 
     Returns:
@@ -262,6 +265,7 @@ def load_config(
         config_file=config_file,
         check_groups=check_groups,
         commit_hash=commit_hash,
+        scan_mode=scan_mode,
         llm=llm_config,
         debug=debug,
     )

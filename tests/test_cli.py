@@ -225,6 +225,30 @@ class TestParseArgs:
             assert args.config == [Path('/config.toml')]
             assert args.commit == ['abc123']
 
+    def test_parse_mode_default(self):
+        """Parse mode defaults to 'uncommitted'."""
+        with patch.object(sys, 'argv', ['code-scanner', '/project']):
+            args = parse_args()
+            assert args.mode == 'uncommitted'
+
+    def test_parse_mode_branch(self):
+        """Parse with branch mode."""
+        with patch.object(sys, 'argv', ['code-scanner', '/project', '--mode', 'branch']):
+            args = parse_args()
+            assert args.mode == 'branch'
+
+    def test_parse_mode_uncommitted_explicit(self):
+        """Parse with explicit uncommitted mode."""
+        with patch.object(sys, 'argv', ['code-scanner', '/project', '--mode', 'uncommitted']):
+            args = parse_args()
+            assert args.mode == 'uncommitted'
+
+    def test_parse_mode_invalid(self):
+        """Parse with invalid mode exits."""
+        with patch.object(sys, 'argv', ['code-scanner', '/project', '--mode', 'invalid']):
+            with pytest.raises(SystemExit):
+                parse_args()
+
 
 
 

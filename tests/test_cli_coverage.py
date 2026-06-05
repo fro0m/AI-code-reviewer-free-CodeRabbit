@@ -101,7 +101,7 @@ class TestApplicationSetup:
             # FileFilter should be created with scanner files and ignore patterns
             MockFileFilter.assert_called_once()
             
-            # GitWatcher should include excluded_files, file_filter, and cache_ttl
+            # GitWatcher should include excluded_files, file_filter, cache_ttl, and scan_mode
             MockGitWatcher.assert_called_once_with(
                 mock_config.target_directory,
                 mock_config.commit_hash,
@@ -112,6 +112,7 @@ class TestApplicationSetup:
                 },
                 file_filter=MockFileFilter.return_value,
                 cache_ttl=5.0,
+                scan_mode=mock_config.scan_mode,
             )
             MockGitWatcher.return_value.connect.assert_called_once()
 
