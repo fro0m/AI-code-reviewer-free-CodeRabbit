@@ -570,6 +570,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "-m",
         "--mode",
         type=str,
         default="uncommitted",

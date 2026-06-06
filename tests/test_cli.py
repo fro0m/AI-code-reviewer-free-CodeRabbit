@@ -233,19 +233,19 @@ class TestParseArgs:
 
     def test_parse_mode_branch(self):
         """Parse with branch mode."""
-        with patch.object(sys, 'argv', ['code-scanner', '/project', '--mode', 'branch']):
+        with patch.object(sys, 'argv', ['code-scanner', '/project', '-m', 'branch']):
             args = parse_args()
             assert args.mode == 'branch'
 
     def test_parse_mode_uncommitted_explicit(self):
         """Parse with explicit uncommitted mode."""
-        with patch.object(sys, 'argv', ['code-scanner', '/project', '--mode', 'uncommitted']):
+        with patch.object(sys, 'argv', ['code-scanner', '/project', '-m', 'uncommitted']):
             args = parse_args()
             assert args.mode == 'uncommitted'
 
     def test_parse_mode_invalid(self):
         """Parse with invalid mode exits."""
-        with patch.object(sys, 'argv', ['code-scanner', '/project', '--mode', 'invalid']):
+        with patch.object(sys, 'argv', ['code-scanner', '/project', '-m', 'invalid']):
             with pytest.raises(SystemExit):
                 parse_args()
 
