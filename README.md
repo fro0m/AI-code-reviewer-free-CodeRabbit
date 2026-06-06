@@ -448,6 +448,34 @@ Useful for:
 - Reviewing pull requests before merging
 - Analyzing feature branches
 
+### Operation Mode
+
+Control what set of changes the scanner analyzes with the `--mode` option:
+
+```bash
+code-scanner /path/to/project -m branch -c /path/to/config.toml
+```
+
+**Available modes:**
+
+| Mode | Description |
+|------|-------------|
+| `uncommitted` (default) | Scans working tree changes since the last commit. Best for real-time feedback as you code. |
+| `branch` | Scans all changes in the current branch since it diverged from `main` (or `master`). Includes both committed and uncommitted changes. Useful for reviewing an entire feature branch before merging. |
+
+**Examples:**
+
+```bash
+# Default: scan uncommitted changes only
+code-scanner /path/to/project
+
+# Scan all changes in the current branch
+code-scanner /path/to/project -m branch
+
+# Branch mode with custom config
+code-scanner /path/to/project -m branch -c /path/to/config.toml
+```
+
 ### Output Files
 
 Each project generates:

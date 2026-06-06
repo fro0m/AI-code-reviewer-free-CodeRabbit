@@ -10,6 +10,13 @@ from .text_utils import normalize_whitespace as _normalize_whitespace
 from .text_utils import similarity_ratio as _similarity_ratio
 
 
+class ScanMode(Enum):
+    """Operation mode for code scanning."""
+
+    UNCOMMITTED = "uncommitted"
+    BRANCH = "branch"
+
+
 class IssueStatus(Enum):
     """Status of a detected issue."""
 
