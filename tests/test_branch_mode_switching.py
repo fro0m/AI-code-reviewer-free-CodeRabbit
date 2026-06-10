@@ -5,12 +5,11 @@ with ScanMode.BRANCH, including active project determination, state
 preservation, status transitions, eligibility filtering, and full workflows.
 """
 
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from code_scanner.models import Project, ScanStatus, ScanMode
+from code_scanner.models import ScanStatus
 from code_scanner.project_manager import ProjectManager
 
 
