@@ -147,7 +147,7 @@ class ProjectManager:
                         # Project was scanned before, check if file changes occurred after
                         has_new_changes = any(
                             f.mtime_ns is not None and (f.mtime_ns / 1e9) > project.last_scan_time.timestamp()
-                                for f in state.changed_files
+                            for f in state.changed_files
                         )
                     else:
                         # Project not scanned yet, consider it eligible
