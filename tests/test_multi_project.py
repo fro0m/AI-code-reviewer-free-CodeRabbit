@@ -36,6 +36,21 @@ class TestFullMultiProjectWorkflow:
             config=Mock(),
         )
 
+        # Set up git watcher for project1 so it shows changes
+        mock_git1 = Mock()
+        mock_state1 = Mock()
+        mock_state1.has_changes = True
+        mock_state1.changed_files = [Mock(path="file1.py")]
+        mock_git1.get_state.return_value = mock_state1
+        project1.git_watcher = mock_git1
+
+        mock_git2 = Mock()
+        mock_state2 = Mock()
+        mock_state2.has_changes = True
+        mock_state2.changed_files = [Mock(path="file2.py")]
+        mock_git2.get_state.return_value = mock_state2
+        project2.git_watcher = mock_git2
+
         # Switch to project1
         pm.switch_to_project(project1)
         assert pm.get_active_project() == project1
