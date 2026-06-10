@@ -146,8 +146,8 @@ class ProjectManager:
                     if project.last_scan_time is not None:
                         # Project was scanned before, check if file changes occurred after
                         has_new_changes = any(
-                            f.mtime_ns is not None and f.mtime_ns > project.last_scan_time.timestamp()
-                                for f in state.changed_files
+                            f.mtime_ns is not None and (f.mtime_ns / 1e9) > project.last_scan_time.timestamp()
+                            for f in state.changed_files
                         )
                     else:
                         # Project not scanned yet, consider it eligible
@@ -170,7 +170,7 @@ class ProjectManager:
                 logger.debug("No eligible projects with new changes, keeping current active project")
                 return self.get_active_project()
 
-            most_active_id = max(project_activity, key=project_activity.get)
+            most_active_id = max(eligible_projects, key=project_activity.get)
             logger.info(f"Project activity comparison (filtered): {project_activity}")
             logger.info(f"Selected most active project: {most_active_id} (max_mtime_ns={project_activity[most_active_id]})")
             return self._projects[most_active_id]

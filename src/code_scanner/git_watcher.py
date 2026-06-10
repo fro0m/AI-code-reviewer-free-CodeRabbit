@@ -7,7 +7,7 @@ from typing import Optional
 from git import Repo, InvalidGitRepositoryError, GitCommandError
 
 from .file_filter import FileFilter
-from .models import ChangedFile, FileStatus, GitState
+from .models import ChangedFile, FileStatus, GitState, ScanMode
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class GitWatcher:
         excluded_files: Optional[set[str]] = None,
         file_filter: Optional[FileFilter] = None,
         cache_ttl: float = 1.0,
+        scan_mode: ScanMode = ScanMode.UNCOMMITTED,
     ):
         """Initialize the Git watcher.
 
@@ -40,6 +41,8 @@ class GitWatcher:
             file_filter: Optional unified FileFilter for all exclusion rules.
                         If provided, replaces subprocess-based gitignore checking.
             cache_ttl: Time-to-live for git status cache in seconds. Default 1.0.
+            scan_mode: Operation mode. UNCOMMITTED scans working tree changes,
+                      BRANCH scans all changes in the current branch.
 
         Raises:
             GitError: If path is not a valid Git repository.
@@ -50,10 +53,13 @@ class GitWatcher:
         self._repo: Optional[Repo] = None
         self._last_state: Optional[GitState] = None
         self._file_filter = file_filter
+        self._scan_mode = scan_mode
         # Git status cache to reduce subprocess calls
         self._cache_ttl = cache_ttl
         self._cached_state: Optional[GitState] = None
         self._cache_time: float = 0.0
+        # Branch mode: cached merge-base commit hash
+        self._branch_base: Optional[str] = None
 
     def connect(self) -> None:
         """Connect to the Git repository.
@@ -133,6 +139,35 @@ class GitWatcher:
         """Invalidate the git status cache, forcing next get_state() to refresh."""
         self._cached_state = None
         self._cache_time = 0.0
+
+    def _resolve_branch_base(self) -> Optional[str]:
+        """Resolve the base branch and return the merge-base commit hash.
+
+        Tries 'main', then 'master' as the base branch. Returns the merge-base
+        between the current HEAD and the detected base branch, or None if no
+        base branch can be determined.
+
+        Returns:
+            Merge-base commit hash or None.
+        """
+        if self._repo is None:
+            return None
+
+        if self._branch_base is not None:
+            return self._branch_base
+
+        for base_name in ("main", "master"):
+            try:
+                merge_base = self._repo.git.merge_base(base_name, "HEAD")
+                if merge_base:
+                    self._branch_base = merge_base.strip()
+                    logger.info(f"Branch mode: using base branch '{base_name}', merge-base: {self._branch_base[:8]}")
+                    return self._branch_base
+            except GitCommandError:
+                continue
+
+        logger.warning("Branch mode enabled but could not find 'main' or 'master' branch")
+        return None
 
     def _get_changed_files(self) -> list[ChangedFile]:
         """Get list of files with uncommitted changes.
@@ -281,6 +316,48 @@ class GitWatcher:
                             logger.debug(f"Skipping excluded file in commit diff: {path}")
                 except GitCommandError as e:
                     logger.warning(f"Git diff error: {e}")
+
+            # If branch mode, also get files changed in the current branch
+            if self._scan_mode == ScanMode.BRANCH:
+                branch_base = self._resolve_branch_base()
+                if branch_base:
+                    try:
+                        diff_output = self._repo.git.diff(
+                            "--name-status", branch_base, "--"
+                        )
+                        for line in diff_output.splitlines():
+                            if not line:
+                                continue
+                            parts = line.split("\t", 1)
+                            if len(parts) < 2:
+                                continue
+                            status_char, path = parts[0], parts[1]
+
+                            # Handle renamed files
+                            if "\t" in path:
+                                path = path.split("\t")[1]
+
+                            if path in seen_paths:
+                                continue
+
+                            if status_char == "D":
+                                status = FileStatus.DELETED
+                            else:
+                                status = FileStatus.STAGED
+
+                            if not self._is_ignored(path) and path not in self.excluded_files:
+                                mtime_ns = None
+                                if status != "deleted":
+                                    try:
+                                        mtime_ns = (self.repo_path / path).stat().st_mtime_ns
+                                    except OSError:
+                                        pass
+                                changed_files.append(ChangedFile(path=path, status=status, mtime_ns=mtime_ns))
+                                seen_paths.add(path)
+                            elif path in self.excluded_files:
+                                logger.debug(f"Skipping excluded file in branch diff: {path}")
+                    except GitCommandError as e:
+                        logger.warning(f"Git branch diff error: {e}")
 
         except GitCommandError as e:
             logger.warning(f"Git command error: {e}")

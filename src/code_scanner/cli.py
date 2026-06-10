@@ -27,7 +27,7 @@ from .scanner import Scanner
 from .utils import setup_logging
 from .project_manager import ProjectManager
 from .llm_client_manager import LLMClientManager
-from .models import Project, ScanStatus
+from .models import Project, ScanStatus, ScanMode
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +41,17 @@ class LockFileError(Exception):
 class Application:
     """Main application coordinator with multi-project support."""
 
-    def __init__(self, projects: list[tuple[Path, Path, Optional[str]]], debug: bool = False):
+    def __init__(self, projects: list[tuple[Path, Path, Optional[str]]], debug: bool = False, scan_mode: ScanMode = ScanMode.UNCOMMITTED):
         """Initialize the application.
 
         Args:
             projects: List of (target_directory, config_file, commit_hash) tuples.
             debug: Enable debug logging.
+            scan_mode: Operation mode (uncommitted or branch).
         """
         self._project_configs = projects
         self._debug = debug
+        self._scan_mode = scan_mode
 
         # Multi-project components
         self.project_manager = ProjectManager()
@@ -150,6 +152,7 @@ class Application:
                 target_directory=target_dir,
                 config_file=config_file,
                 commit_hash=commit_hash,
+                scan_mode=self._scan_mode,
                 debug=self._debug,
             )
 
@@ -265,6 +268,7 @@ class Application:
             excluded_files=scanner_files,  # Keep for has_changes_since filtering
             file_filter=project.file_filter,  # Use for gitignore matching
             cache_ttl=5.0,  # Match the main loop interval to reduce CPU usage
+            scan_mode=config.scan_mode,
         )
         project.git_watcher.connect()
 
@@ -566,6 +570,16 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "-m",
+        "--mode",
+        type=str,
+        default="uncommitted",
+        choices=["uncommitted", "branch"],
+        help="Operation mode: 'uncommitted' scans working tree changes (default), "
+             "'branch' scans all changes in the current git branch",
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -650,7 +664,8 @@ def main() -> int:
         print(f"Configuration error: {e}", file=sys.stderr)
         return 1
 
-    app = Application(projects, debug=args.debug)
+    scan_mode = ScanMode(args.mode) if args.mode else ScanMode.UNCOMMITTED
+    app = Application(projects, debug=args.debug, scan_mode=scan_mode)
     return app.run()
 
 

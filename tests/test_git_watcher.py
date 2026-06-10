@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from code_scanner.git_watcher import GitWatcher, GitError
-from code_scanner.models import FileStatus
+from code_scanner.models import FileStatus, ScanMode
 
 
 class TestGitWatcher:
@@ -264,3 +264,166 @@ class TestGitWatcher:
             watcher.connect()
         
         assert "Invalid commit hash" in str(exc_info.value)
+
+
+class TestGitWatcherBranchMode:
+    """Tests for branch mode operation."""
+
+    def test_branch_mode_default_is_uncommitted(self, git_repo: Path):
+        """Test that default scan mode is UNCOMMITTED."""
+        watcher = GitWatcher(git_repo)
+        watcher.connect()
+        state = watcher.get_state()
+        assert not state.has_changes
+
+    def test_branch_mode_explicit_uncommitted(self, git_repo: Path):
+        """Test explicit uncommitted mode works same as default."""
+        watcher = GitWatcher(git_repo, scan_mode=ScanMode.UNCOMMITTED)
+        watcher.connect()
+        state = watcher.get_state()
+        assert not state.has_changes
+
+    def test_branch_mode_no_main_branch(self, git_repo: Path):
+        """Test branch mode when there's no main/master branch falls back gracefully."""
+        watcher = GitWatcher(git_repo, scan_mode=ScanMode.BRANCH)
+        watcher.connect()
+        state = watcher.get_state()
+        assert not state.has_changes
+
+    def test_branch_mode_detects_branch_changes(self, git_repo: Path):
+        """Test branch mode detects changes in the branch compared to main."""
+        # Create a 'main' branch first with an initial commit
+        import subprocess
+        subprocess.run(
+            ["git", "branch", "-m", "main"], cwd=git_repo, capture_output=True
+        )
+
+        # Make another commit on main
+        (git_repo / "on_main.txt").write_text("main file")
+        subprocess.run(["git", "add", "on_main.txt"], cwd=git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Commit on main"],
+            cwd=git_repo,
+            capture_output=True,
+        )
+
+        # Create a feature branch from main and make commits
+        subprocess.run(
+            ["git", "checkout", "-b", "feature"], cwd=git_repo, capture_output=True
+        )
+        (git_repo / "feature_file.txt").write_text("feature content")
+        subprocess.run(["git", "add", "feature_file.txt"], cwd=git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Feature commit"],
+            cwd=git_repo,
+            capture_output=True,
+        )
+
+        watcher = GitWatcher(git_repo, scan_mode=ScanMode.BRANCH)
+        watcher.connect()
+
+        state = watcher.get_state()
+        paths = [f.path for f in state.changed_files]
+        assert "feature_file.txt" in paths
+
+    def test_branch_mode_combined_with_uncommitted(self, git_repo: Path):
+        """Test branch mode picks up both committed branch changes and uncommitted changes."""
+        import subprocess
+        subprocess.run(
+            ["git", "branch", "-m", "main"], cwd=git_repo, capture_output=True
+        )
+
+        # Commit on main
+        (git_repo / "main.txt").write_text("main")
+        subprocess.run(["git", "add", "main.txt"], cwd=git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "main commit"],
+            cwd=git_repo,
+            capture_output=True,
+        )
+
+        # Feature branch with a commit
+        subprocess.run(
+            ["git", "checkout", "-b", "feature"], cwd=git_repo, capture_output=True
+        )
+        (git_repo / "committed.txt").write_text("committed")
+        subprocess.run(["git", "add", "committed.txt"], cwd=git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Feature commit"],
+            cwd=git_repo,
+            capture_output=True,
+        )
+
+        # Add an uncommitted change
+        (git_repo / "uncommitted.txt").write_text("uncommitted")
+
+        watcher = GitWatcher(git_repo, scan_mode=ScanMode.BRANCH)
+        watcher.connect()
+
+        state = watcher.get_state()
+        paths = [f.path for f in state.changed_files]
+        assert "committed.txt" in paths
+        assert "uncommitted.txt" in paths
+
+    def test_branch_mode_with_master_base(self, git_repo: Path):
+        """Test branch mode works with 'master' as base when 'main' doesn't exist."""
+        import subprocess
+        subprocess.run(
+            ["git", "branch", "-m", "master"], cwd=git_repo, capture_output=True
+        )
+
+        (git_repo / "master_file.txt").write_text("master")
+        subprocess.run(["git", "add", "master_file.txt"], cwd=git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "master commit"],
+            cwd=git_repo,
+            capture_output=True,
+        )
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feature"], cwd=git_repo, capture_output=True
+        )
+        (git_repo / "branch_file.txt").write_text("branch")
+        subprocess.run(["git", "add", "branch_file.txt"], cwd=git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Branch commit"],
+            cwd=git_repo,
+            capture_output=True,
+        )
+
+        watcher = GitWatcher(git_repo, scan_mode=ScanMode.BRANCH)
+        watcher.connect()
+
+        state = watcher.get_state()
+        paths = [f.path for f in state.changed_files]
+        assert "branch_file.txt" in paths
+        assert "master_file.txt" not in paths  # not changed on feature branch
+
+    def test_branch_mode_resolve_base_cached(self, git_repo: Path):
+        """Test that branch base resolution is cached."""
+        import subprocess
+        subprocess.run(
+            ["git", "branch", "-m", "main"], cwd=git_repo, capture_output=True
+        )
+
+        (git_repo / "base_file.txt").write_text("base")
+        subprocess.run(["git", "add", "base_file.txt"], cwd=git_repo, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "base commit"],
+            cwd=git_repo,
+            capture_output=True,
+        )
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feature"], cwd=git_repo, capture_output=True
+        )
+
+        watcher = GitWatcher(git_repo, scan_mode=ScanMode.BRANCH)
+        watcher.connect()
+
+        assert watcher._branch_base is None
+        base1 = watcher._resolve_branch_base()
+        assert base1 is not None
+        base2 = watcher._resolve_branch_base()
+        assert base1 == base2
+        assert watcher._branch_base is not None
